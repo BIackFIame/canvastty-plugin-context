@@ -1,0 +1,22 @@
+:root { color-scheme: light dark; font: 13px/1.4 system-ui, sans-serif; }
+body { margin: 0; padding: 12px 16px 44px; }
+h1 { font-size: 15px; margin: 0 0 4px; }
+h2 { font-size: 13px; margin: 16px 0 6px; }
+h3 { font-size: 12px; margin: 14px 0 6px; }
+.muted { opacity: 0.75; }
+.error { color: #c0392b; }
+.row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin: 4px 0; }
+.field { display: inline-flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.check { display: inline-block; margin-right: 8px; }
+.file { display: block; margin: 2px 0; }
+select, input, button, textarea { font: inherit; }
+input:not([type]), input[type="search"] { padding: 3px 6px; min-width: 160px; }
+textarea { width: 100%; box-sizing: border-box; min-height: 64px; }
+.projects, .rules, .tasks { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 6px; }
+.project--selected > button:first-child { font-weight: 600; }
+.rule { padding: 6px 8px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 6px; }
+.rule--off { opacity: 0.6; }
+.rule__value, .preview { margin: 4px 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+.preview { padding: 6px 8px; border: 1px dashed color-mix(in srgb, currentColor 25%, transparent); border-radius: 6px; }
+.rule-form, .add { padding: 6px 8px; border: 1px dashed color-mix(in srgb, currentColor 25%, transparent); border-radius: 6px; }
+.status { position: fixed; left: 0; right: 0; bottom: 0; padding: 6px 16px; min-height: 1.4em; background: Canvas; border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
