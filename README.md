@@ -1,5 +1,7 @@
 # CanvasTTY Context
 
+> **Status: preview.** This plugin needs CanvasTTY plugin API v2 (plugin services, launch contributors, session environments, decision hooks, plugin tools and card actions). Those extension points are proposed upstream and are not in a released CanvasTTY yet, so installing it on a current release fails the manifest check.
+
 Project rules for agents in [CanvasTTY](https://github.com/howdeploy/CanvasTTY): the conventions you would otherwise
 repeat in every prompt, kept per project and sent to an agent when you launch it.
 
