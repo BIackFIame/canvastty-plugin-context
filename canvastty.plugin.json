@@ -23,8 +23,8 @@
     },
     {
       "path": "services/context.mjs",
-      "bytes": 50569,
-      "sha256": "6de8a6433c3879ae371177f87fdd9644837d9496cc545287960a8cb1de0244ca"
+      "bytes": 55733,
+      "sha256": "168359515ee7f78f49f43cc8f87d4f3b95bd67b4be257a0629cb8961f68aff0a"
     },
     {
       "path": "settings/context.html",
@@ -33,8 +33,8 @@
     },
     {
       "path": "settings/context.js",
-      "bytes": 28313,
-      "sha256": "572a18328283e394e7ee26529c2bec1067b13a3cde397c12290561e536472fee"
+      "bytes": 29637,
+      "sha256": "6452084e4b008da241d73f7afbf83b597dc04394f74e8d6f56bd34afce31a930"
     },
     {
       "path": "settings/context.css",

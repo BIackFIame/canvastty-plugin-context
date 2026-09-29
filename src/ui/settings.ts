@@ -1,6 +1,6 @@
 // The Project rules settings page (bundled to settings/context.js). It runs in CanvasTTY's sandboxed plugin frame (no
 // forms: buttons only) and only talks to the plugin's own service, which validates and stores everything.
-import type { Category, ImportDiagnostic, ImportKind, Project, Rule, RulesState, RuleValue, Scope, Task } from '../shared/rules.ts';
+import { MAX_IMPORTS, type Category, type ImportDiagnostic, type ImportKind, type Project, type Rule, type RulesState, type RuleValue, type Scope, type Task } from '../shared/rules.ts';
 import type { Preset } from '../shared/presets.ts';
 
 interface PluginHost {
@@ -28,7 +28,7 @@ const STRINGS = {
     importTitle: 'Import from project files', importHint: 'Reads the files you select whenever rules are needed (no background scan): AGENTS.md, CLAUDE.md, GEMINI.md, CONTRIBUTING.md, .cursorrules, .windsurfrules, Cursor rules, README development sections, .editorconfig, Prettier/ESLint JSON, CSS custom properties. JavaScript configs are never run.',
     findFiles: 'Find project files', saveImports: 'Save selection', noFiles: 'No convention files found in this folder.',
     previewTitle: 'What an agent gets', preview: 'Show', previewEmpty: 'Nothing: no rule applies here.', previewSize: (size: number, budget: number, omitted: number) => `${size} of ${budget}${omitted ? `; ${omitted} rule(s) left out for space` : ''}`,
-    saved: 'Saved.', notSaved: 'Not saved: ', removed: 'Removed.',
+    saved: 'Saved.', notSaved: 'Not saved: ', removed: 'Removed.', tooManyImports: (max: number) => `At most ${max} project files can be imported.`,
     scopes: { defaults: 'Defaults', user: 'You (all projects)', organization: 'Organization', project: 'This project', task: 'Task' } as Record<string, string>
   },
   ru: {
@@ -43,7 +43,7 @@ const STRINGS = {
     importTitle: 'Импорт из файлов проекта', importHint: 'Выбранные файлы читаются каждый раз, когда нужны правила (без фонового сканирования): AGENTS.md, CLAUDE.md, GEMINI.md, CONTRIBUTING.md, .cursorrules, .windsurfrules, правила Cursor, разделы README о разработке, .editorconfig, JSON Prettier/ESLint, CSS-переменные. JavaScript-конфиги не запускаются.',
     findFiles: 'Найти файлы проекта', saveImports: 'Сохранить выбор', noFiles: 'В этой папке нет файлов с соглашениями.',
     previewTitle: 'Что получит агент', preview: 'Показать', previewEmpty: 'Ничего: здесь не действует ни одно правило.', previewSize: (size: number, budget: number, omitted: number) => `${size} из ${budget}${omitted ? `; не поместилось правил: ${omitted}` : ''}`,
-    saved: 'Сохранено.', notSaved: 'Не сохранено: ', removed: 'Удалено.',
+    saved: 'Сохранено.', notSaved: 'Не сохранено: ', removed: 'Удалено.', tooManyImports: (max: number) => `Импортировать можно не больше ${max} файлов проекта.`,
     scopes: { defaults: 'По умолчанию', user: 'Вы (все проекты)', organization: 'Организация', project: 'Этот проект', task: 'Задача' } as Record<string, string>
   }
 };
@@ -63,6 +63,10 @@ let importedRules: Rule[] = [];
 let importNotes: ImportDiagnostic[] = [];
 let importError = '';
 let candidates: Candidate[] | null = null;
+/** The project the shown candidates were found in (saving them goes there, whatever is selected by then). */
+let candidatesFor = '';
+/** Bumped whenever another project is selected: an answer for the one before is dropped. */
+let view = 0;
 let preview: Preview | null = null;
 let previewCli = 'claude';
 
@@ -100,29 +104,37 @@ const projectTasks = (): Task[] => data?.state.tasks.filter(task => task.project
 
 async function load(): Promise<void> {
   data = await request('state') as typeof data;
-  if (selected && !project()) selected = GLOBAL;
+  if (selected && !project()) { selected = GLOBAL; view++; candidates = null; preview = null; }
   await loadImported();
   render();
 }
 async function loadImported(): Promise<void> {
   importedRules = []; importNotes = []; importError = '';
   if (!selected) return;
-  const answer = await request('imported', { projectId: selected }) as { rules: Rule[]; diagnostics: ImportDiagnostic[] } | { error: string };
+  const asked = { projectId: selected, view };
+  const answer = await request('imported', { projectId: asked.projectId }) as { rules: Rule[]; diagnostics: ImportDiagnostic[] } | { error: string };
+  if (asked.view !== view || asked.projectId !== selected) return;
   if ('error' in answer) importError = answer.error;
   else { importedRules = answer.rules; importNotes = answer.diagnostics; }
 }
 
-/** Runs a store change with the revision the page shows; a stale page reloads instead of overwriting. */
-async function change(method: string, params: Record<string, unknown>, done = t.saved): Promise<boolean> {
-  if (!data) return false;
+/** Shows another project (or everyone's rules) and forgets what was on screen for the one before. */
+function choose(id: string): void {
+  selected = id; view++; draft = null; candidates = null; preview = null;
+  void loadImported().then(render);
+}
+
+/** Runs a store change with the revision the page shows; a stale page reloads instead of overwriting. The new state, or null. */
+async function change(method: string, params: Record<string, unknown>, done = t.saved): Promise<RulesState | null> {
+  if (!data) return null;
   try {
-    await request(method, { ...params, revision: data.state.revision });
+    const next = await request(method, { ...params, revision: data.state.revision }) as RulesState;
     say(done);
     await load();
-    return true;
+    return next;
   } catch (error) {
     say(`${t.notSaved}${errorText(error)}`);
-    return false;
+    return null;
   }
 }
 
@@ -225,7 +237,7 @@ function projectsSection(): HTMLElement {
   const list = el('ul', { className: 'projects' });
   const entry = (id: string, label: string, detail: string, removable: boolean): HTMLLIElement => {
     const item = el('li', { className: `project${selected === id ? ' project--selected' : ''}`, dataset: { project: id || 'global' } });
-    item.append(button(label, `open-${id || 'global'}`, () => { selected = id; draft = null; candidates = null; preview = null; void loadImported().then(render); }),
+    item.append(button(label, `open-${id || 'global'}`, () => choose(id)),
       el('span', { className: 'muted', textContent: detail }));
     if (removable) item.append(button(t.remove, `remove-project-${id}`, () => void change('remove', { kind: 'project', id }, t.removed)));
     return item;
@@ -240,8 +252,11 @@ function projectsSection(): HTMLElement {
       button(t.addProject, 'add-project', () => {
         const root = folder.value.trim();
         const label = name.value.trim() || root.split('/').filter(Boolean).pop() || root;
-        void change('saveProject', { project: { label, root, ...(organization.value.trim() ? { organizationId: organization.value.trim() } : {}) } }).then(ok => {
-          if (ok) { const added = data?.state.projects.find(p => p.label === label); if (added) { selected = added.id; void loadImported().then(render); } }
+        const before = new Set(data?.state.projects.map(p => p.id));
+        void change('saveProject', { project: { label, root, ...(organization.value.trim() ? { organizationId: organization.value.trim() } : {}) } }).then(next => {
+          // The project this save added, by id: another one may carry the same name.
+          const added = next?.projects.find(p => !before.has(p.id));
+          if (added && data?.state.projects.some(p => p.id === added.id)) { choose(added.id); render(); }
         });
       })));
 }
@@ -259,19 +274,28 @@ function tasksSection(): HTMLElement {
 function importSection(): HTMLElement {
   const box = el('section', { className: 'imports' }, el('h3', { textContent: t.importTitle }), el('p', { className: 'muted', textContent: t.importHint }),
     button(t.findFiles, 'find-files', () => {
-      request('discover', { projectId: selected }).then(found => { candidates = found as Candidate[]; render(); }, error => say(errorText(error)));
+      const asked = { projectId: selected, view };
+      request('discover', { projectId: asked.projectId }).then(found => {
+        if (asked.view !== view) return;
+        candidates = found as Candidate[]; candidatesFor = asked.projectId; render();
+      }, error => say(errorText(error)));
     }));
   if (candidates) {
     if (!candidates.length) box.append(el('p', { className: 'muted', textContent: t.noFiles }));
     const boxes = candidates.map(candidate => {
       const input = el('input', { type: 'checkbox', checked: candidate.selected, name: `import-${candidate.path}` });
+      // The store keeps at most MAX_IMPORTS files per project.
+      input.addEventListener('change', () => {
+        if (input.checked && boxes.filter(entry => entry.input.checked).length > MAX_IMPORTS) { input.checked = false; say(t.tooManyImports(MAX_IMPORTS)); }
+      });
       box.append(el('label', { className: 'check file' }, input, ` ${candidate.path} `, el('span', { className: 'muted', textContent: candidate.kind })));
       return { candidate, input };
     });
     if (candidates.length) {
       box.append(el('div', { className: 'row' }, button(t.saveImports, 'save-imports', () => {
         const imports = boxes.filter(entry => entry.input.checked).map(entry => ({ path: entry.candidate.path, kind: entry.candidate.kind }));
-        void change('saveImports', { projectId: selected, imports }).then(ok => { if (ok) { candidates = null; render(); } });
+        if (imports.length > MAX_IMPORTS) { say(t.tooManyImports(MAX_IMPORTS)); return; }
+        void change('saveImports', { projectId: candidatesFor, imports }).then(next => { if (next) { candidates = null; render(); } });
       })));
     }
   }
@@ -283,7 +307,8 @@ function importSection(): HTMLElement {
 function previewSection(): HTMLElement {
   const cli = select('preview-cli', [['claude', 'Claude Code'], ['codex', 'Codex'], ['grok', 'Grok']], previewCli, value => { previewCli = value; });
   const box = el('section', {}, el('h3', { textContent: t.previewTitle }), el('div', { className: 'row' }, cli, button(t.preview, 'preview', () => {
-    request('preview', { provider: previewCli, ...(selected ? { projectId: selected } : {}) }).then(answer => { preview = answer as Preview; render(); }, error => say(errorText(error)));
+    const asked = view;
+    request('preview', { provider: previewCli, ...(selected ? { projectId: selected } : {}) }).then(answer => { if (asked !== view) return; preview = answer as Preview; render(); }, error => say(errorText(error)));
   })));
   if (preview) {
     box.append(el('p', { className: 'muted', textContent: t.previewSize(preview.size, preview.budget, preview.omitted) }),

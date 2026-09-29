@@ -38,6 +38,10 @@ function readSource(project: Project, entry: ImportSource, projects: readonly Pr
     try {
       const before = fstatSync(fd);
       if (!before.isFile() || before.nlink !== 1 || before.dev !== rootStat.dev || before.uid !== rootStat.uid || before.size > MAX_FILE_BYTES) throw new Error('unsafe or too large file');
+      // A folder on the way swapped for a link between the checks above and the open: the opened file is then not the
+      // one at this path inside the project.
+      const now = lstatSync(target);
+      if (now.dev !== before.dev || now.ino !== before.ino || realpathSync(target) !== target) throw new Error('changed while opening');
       const data = Buffer.alloc(before.size + 1);
       let length = 0;
       while (length < data.length) { const count = readSync(fd, data, length, data.length - length, length); if (!count) break; length += count; }

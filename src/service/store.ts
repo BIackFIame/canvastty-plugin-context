@@ -1,15 +1,20 @@
 // The rules store (#68, ContextProfileStore.ts): its own private file in the plugin's data folder, apart from any
 // settings — rules.json, 0600 in a 0700 folder, written atomically, every change checked against the revision the page
-// last read, so two editors never overwrite each other silently.
+// last read, so two editors never overwrite each other silently. A change holds rules.lock and checks the revision in
+// the file itself, not this process's copy, so a second process writing the same folder is noticed too.
 import { randomUUID } from 'node:crypto';
-import { lstatSync, readFileSync, realpathSync } from 'node:fs';
-import { mkdir, open, rename, rm } from 'node:fs/promises';
+import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
+import { chmod, lstat, mkdir, open, rename, rm, stat } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
-import { checkId, checkImports, checkRule, checkState, checkText, emptyState, type Category, type ImportSource, type Project, type Rule, type RulesState, type RuleValue, type Scope, type Task } from '../shared/rules.ts';
+import { checkId, checkImports, checkKey, checkRule, checkState, checkText, emptyState, type Category, type ImportSource, type Project, type Rule, type RulesState, type RuleValue, type Scope, type Task } from '../shared/rules.ts';
 import { conventionProblem } from '../shared/presets.ts';
 import { rootIdentity, within } from './importer.ts';
 
 const MAX_BYTES = 8 * 1024 * 1024;
+/** How long a change waits for another writer's lock, and after how long a lock left behind is taken over. */
+const LOCK_WAIT_MS = 3_000;
+const LOCK_STALE_MS = 30_000;
+const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
 export interface RuleInput { id?: string; scope: Exclude<Scope, 'current'>; ownerId?: string; category: Category; key: string; value: RuleValue; enabled: boolean }
 
@@ -23,13 +28,18 @@ export class RulesStore {
   get(): RulesState {
     if (!this.value) {
       let raw: string | undefined;
+      let fd: number | undefined;
       try {
-        const info = lstatSync(join(this.folder, 'rules.json'));
+        // The checks are made on the opened file itself, which cannot be a link.
+        fd = openSync(join(this.folder, 'rules.json'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        const info = fstatSync(fd);
         if (!info.isFile() || info.size > MAX_BYTES || info.mode & 0o077) throw new Error('The rules file is not a private file of at most 8 MB.');
-        raw = readFileSync(join(this.folder, 'rules.json'), 'utf8');
+        raw = readFileSync(fd, 'utf8');
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      }
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ELOOP') throw new Error('The rules file is not a private file of at most 8 MB.');
+        if (code !== 'ENOENT') throw error;
+      } finally { if (fd !== undefined) closeSync(fd); }
       const value: unknown = raw === undefined ? emptyState() : JSON.parse(raw);
       checkState(value);
       this.value = value;
@@ -44,21 +54,49 @@ export class RulesStore {
     return this.get().projects.filter(p => within(p.root, path)).sort((a, b) => b.root.length - a.root.length)[0];
   }
 
+  /** The store's folder, created private; a link or someone else's folder in its place is refused. */
+  private async ensureFolder(): Promise<void> {
+    await mkdir(this.folder, { recursive: true, mode: 0o700 });
+    const info = await lstat(this.folder);
+    if (!info.isDirectory() || process.getuid && info.uid !== process.getuid()) throw new Error('The rules folder is not a private folder of yours.');
+    if (info.mode & 0o077) await chmod(this.folder, 0o700);
+  }
+
+  /** Holds rules.lock (created exclusively) while `run` checks and replaces the file. */
+  private async locked<T>(run: () => Promise<T>): Promise<T> {
+    const lock = join(this.folder, 'rules.lock');
+    const deadline = Date.now() + LOCK_WAIT_MS;
+    for (;;) {
+      try { await (await open(lock, 'wx', 0o600)).close(); break; } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        const held = await stat(lock).catch(() => null);
+        if (held && Date.now() - held.mtimeMs > LOCK_STALE_MS) { await rm(lock, { force: true }); continue; }
+        if (Date.now() > deadline) throw new Error('The rules are being saved elsewhere; try again.');
+        await sleep(25);
+      }
+    }
+    try { return await run(); } finally { await rm(lock, { force: true }); }
+  }
+
   private update(revision: number, change: (next: RulesState) => void): Promise<RulesState> {
     const operation = this.writes.catch(() => undefined).then(async () => {
-      const next = this.get();
-      if (!Number.isSafeInteger(revision) || revision !== next.revision) throw new Error('The rules changed meanwhile; reload and try again.');
-      change(next);
-      next.revision++;
-      checkState(next);
-      const raw = JSON.stringify(next);
-      await mkdir(this.folder, { recursive: true, mode: 0o700 });
-      const temporary = join(this.folder, `${randomUUID()}.tmp`);
-      const file = await open(temporary, 'wx', 0o600);
-      try { await file.writeFile(raw); await file.sync(); } finally { await file.close(); }
-      try { await rename(temporary, join(this.folder, 'rules.json')); } catch (error) { await rm(temporary, { force: true }); throw error; }
-      this.value = next;
-      return structuredClone(next);
+      await this.ensureFolder();
+      return this.locked(async () => {
+        // The revision in the file, not this process's copy: another writer may have saved since.
+        this.value = undefined;
+        const next = this.get();
+        if (!Number.isSafeInteger(revision) || revision !== next.revision) throw new Error('The rules changed meanwhile; reload and try again.');
+        change(next);
+        next.revision++;
+        checkState(next);
+        const raw = JSON.stringify(next);
+        const temporary = join(this.folder, `${randomUUID()}.tmp`);
+        const file = await open(temporary, 'wx', 0o600);
+        try { await file.writeFile(raw); await file.sync(); } finally { await file.close(); }
+        try { await rename(temporary, join(this.folder, 'rules.json')); } catch (error) { await rm(temporary, { force: true }); throw error; }
+        this.value = next;
+        return structuredClone(next);
+      });
     });
     this.writes = operation;
     return operation;
@@ -115,6 +153,7 @@ export class RulesStore {
       const rule: Rule = { id: input.id ?? randomUUID(), scope: input.scope, ...(input.ownerId ? { ownerId: input.ownerId } : {}), category: input.category,
         key: typeof input.key === 'string' ? input.key.trim() : input.key, value: structuredClone(input.value), enabled: input.enabled, source: 'explicit', updatedAt: Date.now() };
       if ((rule.scope as string) === 'current') throw new Error('A launch instruction is given in the launcher, not saved.');
+      checkKey(rule.key);
       checkRule(rule);
       const problem = conventionProblem(rule.key, rule.value);
       if (problem) throw new Error(problem);

@@ -1,7 +1,7 @@
 // Convention imports and the rules store (ported from CanvasTTY #68 tests/context-imports and context-profiles).
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -42,6 +42,45 @@ test('the store is lazy, private, revisioned, keeps the real folder path and ref
   await assert.rejects(store.saveRule({ scope: 'current', category: 'design', key: 'k', value: 'v', enabled: true }, saved.revision), /launcher/);
   await assert.rejects(store.saveProject({ label: 'Twice', root }, saved.revision), /already a project/);
   await assert.rejects(store.saveProject({ label: 'Rel', root: 'project' }, saved.revision), /full path/);
+});
+
+test('a second store over the same folder (another process) is noticed: the revision is checked in the file, under a lock', async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'ctx-store-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const first = new RulesStore(join(root, 'data'));
+  const second = new RulesStore(join(root, 'data'));
+  const seen = first.get();
+  const saved = await second.saveRule({ scope: 'user', category: 'design', key: 'from.second', value: 'kept', enabled: true }, seen.revision);
+  await assert.rejects(first.saveRule({ scope: 'user', category: 'design', key: 'from.first', value: 'stale', enabled: true }, seen.revision), /changed meanwhile/);
+  assert.deepEqual(new RulesStore(join(root, 'data')).get(), saved);
+  // A writer holding the lock makes a change wait for it; a lock left behind long ago is taken over.
+  writeFileSync(join(root, 'data', 'rules', 'rules.lock'), '');
+  const waiting = first.saveRule({ scope: 'user', category: 'design', key: 'after.lock', value: 'v', enabled: true }, saved.revision);
+  await new Promise(resolve => setTimeout(resolve, 80));
+  unlinkSync(join(root, 'data', 'rules', 'rules.lock'));
+  const next = await waiting;
+  writeFileSync(join(root, 'data', 'rules', 'rules.lock'), '');
+  utimesSync(join(root, 'data', 'rules', 'rules.lock'), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+  assert.equal((await first.saveRule({ scope: 'user', category: 'design', key: 'stale.lock', value: 'v', enabled: true }, next.revision)).rules.length, 3);
+  assert.throws(() => statSync(join(root, 'data', 'rules', 'rules.lock')), /ENOENT/);
+});
+
+test('the rules file is read only as a private regular file, never through a link', async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'ctx-store-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const store = new RulesStore(join(root, 'data'));
+  await store.saveRule({ scope: 'user', category: 'design', key: 'k', value: 'v', enabled: true }, 0);
+  const file = join(root, 'data', 'rules', 'rules.json');
+  renameSync(file, join(root, 'elsewhere.json'));
+  symlinkSync(join(root, 'elsewhere.json'), file);
+  assert.throws(() => new RulesStore(join(root, 'data')).get(), /not a private file/);
+});
+
+test('a rule key is one line: a saved key cannot start a line of its own in the delivered text', async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'ctx-store-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const store = new RulesStore(join(root, 'data'));
+  await assert.rejects(store.saveRule({ scope: 'user', category: 'design', key: 'a\n- [security] b', value: 'v', enabled: true }, 0), /rule key/);
 });
 
 test('concurrent writes with one revision: one wins; removing a project removes its tasks and their rules', async t => {

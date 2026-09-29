@@ -33,6 +33,11 @@ export const emptyState = (): RulesState => ({ version: 1, revision: 0, projects
 export function checkText(value: unknown, limit: number, name: string, empty = false): asserts value is string {
   if (typeof value !== 'string' || !empty && !value.trim() || bytes(value) > limit || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(value)) throw new Error(`Invalid or too long ${name}.`);
 }
+/** A rule key as it is saved: one line (no tab, newline or other control character), so it stays one line when delivered. */
+export function checkKey(value: unknown): asserts value is string {
+  checkText(value, 160, 'rule key');
+  if (/[\t\n\r\u2028\u2029]/u.test(value)) throw new Error('Invalid or too long rule key.');
+}
 export function checkId(value: unknown, name = 'id'): asserts value is string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(value)) throw new Error(`Invalid ${name}: letters, digits, dot, dash or underscore, up to 64.`);
 }
@@ -145,7 +150,8 @@ export const priority = (rule: Rule): number => SCOPES.indexOf(rule.scope) * 10 
 
 export function ruleLine(rule: Rule): string {
   const value = typeof rule.value === 'string' ? rule.value.trim() : JSON.stringify(rule.value);
-  return `- [${rule.category}] ${rule.key}: ${value.replace(/\r?\n/gu, '\n  ')}\n`;
+  // A key saved before keys were one line is still delivered as one.
+  return `- [${rule.category}] ${rule.key.replace(/\s+/gu, ' ')}: ${value.replace(/\r?\n/gu, '\n  ')}\n`;
 }
 
 /**
