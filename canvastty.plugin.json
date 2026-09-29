@@ -8,23 +8,24 @@
   "author": "CanvasTTY contributors",
   "permissions": [
     "launch:contribute",
-    "tools:agents"
+    "tools:agents",
+    "cards:decorate"
   ],
   "coreFiles": [
     {
       "path": "README.md",
-      "bytes": 4334,
-      "sha256": "52262e3c4f11e94fec9f770b08edd63d72b6015c75af537d176a46c69225eb30"
+      "bytes": 5142,
+      "sha256": "c7a27ec1cf6b75a92d5840bfb216dd75c3cfdfb27175b8baed427bf3be65ffc2"
     },
     {
       "path": "README.ru.md",
-      "bytes": 7432,
-      "sha256": "daf25b70133cb75dfab6ca5721162d4fee60e3c0a955387115bf9a2565ab8a17"
+      "bytes": 8702,
+      "sha256": "7d2e42cf81970a42576d24eb25056ec9e553f9ee93ed7c132acd7086293a8513"
     },
     {
       "path": "services/context.mjs",
-      "bytes": 55733,
-      "sha256": "168359515ee7f78f49f43cc8f87d4f3b95bd67b4be257a0629cb8961f68aff0a"
+      "bytes": 56699,
+      "sha256": "289ab7397d540ec53ef92eeb52ddcd1be0e5c2433a0699780382f0a19007bc74"
     },
     {
       "path": "settings/context.html",
@@ -137,7 +138,8 @@
             "default": "",
             "maxLength": 200
           }
-        ]
+        ],
+        "delegable": true
       },
       "tools": [
         {

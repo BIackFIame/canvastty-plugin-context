@@ -45,6 +45,32 @@ test('Claude Code gets the rules as a launch file appended to its system prompt;
   assert.match(service.prepare(ctx({ send: true }, { provider: 'opencode' })).refuse.reason, /cannot receive rules/);
 });
 
+test('rules reach an agent on this computer or in a worktree; a server or container card starts without them and says so on the card', async t => {
+  const { root, ctx } = await setup(t);
+  const badges = [];
+  const service = new ContextService({ dataDir: join(root, 'data'), host: { callHost: async (method, params) => { badges.push({ method, ...params }); return null; } } });
+  const worktree = service.prepare(ctx({ send: true }, { environment: { pluginId: 'canvastty-environments', kind: 'worktree' } }));
+  assert.equal(worktree.files[0].relPath, 'rules.md');
+  assert.equal(badges.length, 0);
+  const places = [['ssh-host', 'server'], ['container', 'container'], ['remote-container', 'container']];
+  for (const provider of ['claude', 'codex', 'grok']) {
+    for (const [kind, where] of places) {
+      badges.length = 0;
+      assert.equal(service.prepare(ctx({ send: true }, { provider, sessionId: `s-${kind}`, environment: { pluginId: 'canvastty-environments', kind } })), null, `${provider} ${kind}: launched, not refused`);
+      assert.equal(badges.length, 1);
+      assert.equal(badges[0].method, 'cards.setBadge');
+      assert.equal(badges[0].sessionId, `s-${kind}`);
+      assert.equal(badges[0].badge.text, 'Rules not delivered');
+      assert.ok(badges[0].badge.text.length <= 24 && badges[0].badge.tooltip.length <= 200);
+      assert.match(badges[0].badge.tooltip, new RegExp(`^Project rules are not delivered on this ${where}`, 'u'));
+    }
+  }
+  assert.equal(service.prepare(ctx({ send: true }, { environment: { pluginId: 'other-plugin', kind: 'worktree' } })), null, 'another plugin\'s environment: not known to pass the launch on');
+  badges.length = 0;
+  assert.equal(service.prepare(ctx({ send: false }, { environment: { pluginId: 'canvastty-environments', kind: 'ssh-host' } })), null);
+  assert.equal(badges.length, 0, 'Send rules off: no note');
+});
+
 test('a saved task and the launch instruction win over the project; a task of another project refuses', async t => {
   const { service, ctx, taskId, root, project } = await setup(t);
   const withTask = service.prepare(ctx({ send: true, task: taskId, current: 'Keep it short.' })).files[0].content;

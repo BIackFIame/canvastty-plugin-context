@@ -25,7 +25,9 @@ test('coreFiles match the package bytes; the service and page are single bundled
   }
   for (const path of ['services/context.mjs', 'settings/context.js']) assert.doesNotMatch(readFileSync(join(root, path), 'utf8'), /^import .* from ["']\.\.?\//mu, `${path} is bundled`);
   assert.equal(manifest.id, 'canvastty-context');
-  assert.deepEqual(manifest.permissions, ['launch:contribute', 'tools:agents']);
+  assert.deepEqual(manifest.permissions, ['launch:contribute', 'tools:agents', 'cards:decorate']);
+  // rules_for hands orchestrators launchOptions for spawn_agent; they only pick prompt text, so they are delegable.
+  assert.equal(manifest.services[0].launch.delegable, true);
 });
 
 test('the manifest passes CanvasTTY\'s own validator (CANVASTTY_REPO)', { skip: !process.env.CANVASTTY_REPO }, async () => {
@@ -98,6 +100,8 @@ test('through CanvasTTY\'s supervisor and launch pipeline: the rules file is wri
   });
   const options = pipeline.normalizeOptions('claude', { [checked.id]: { send: true } });
   assert.deepEqual(options, { [checked.id]: { send: true, task: 'none', category: 'all', current: '' } });
+  // What rules_for hands an orchestrator passes spawn_agent's delegated check.
+  assert.deepEqual(pipeline.normalizeOptions('claude', { [checked.id]: { send: true } }, { delegated: true }), options);
   assert.deepEqual(pipeline.normalizeOptions('codex', { [checked.id]: { send: true, task: 'none', category: 'all', current: '' } }), { [checked.id]: { send: true, task: 'none', category: 'all', current: '' } });
   const prepared = await pipeline.prepare({ sessionId: 'e2e', provider: 'claude', profile: 'normal', role: 'agent', cwd: project, restoring: false, resume: false, environment: null, options });
   assert.equal(prepared.ok, true, prepared.reason);

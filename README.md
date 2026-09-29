@@ -47,7 +47,17 @@ are not offered the option.
 
 `canvastty-context__rules_for` (orchestrators and subagents) answers which rules apply to a folder (default: the
 caller's), optionally for a saved task or one category: the rules in order, the exact text, and `launchOptions` to pass
-to `spawn_agent` so a Claude Code, Codex or Grok subagent gets them at launch.
+to `spawn_agent` so a Claude Code, Codex or Grok subagent gets them at launch. The launch options are declared
+`delegable`: they only choose which rules are added to the agent's prompt, never a permission.
+
+## Servers and containers
+
+Rules travel with the launch (a file for Claude Code, an argument for Codex and Grok). On this computer and in a
+CanvasTTY Environments worktree they reach the agent. Servers (ssh) and containers do not pass the launch's files and
+local paths on, so a card there with **Send rules** on starts without the rules and carries the badge *Rules not
+delivered* ("project rules are not delivered on this server/container"); give the agent the text of `rules_for` in its
+prompt if it needs them. Another plugin's environment is treated the same way, since the plugin cannot tell whether it
+passes the launch on. The badge needs the `cards:decorate` permission.
 
 ## Storage
 

@@ -29,12 +29,28 @@ const errorText = (error: unknown): string => error instanceof Error ? error.mes
 const refuse = (reason: string): LaunchAnswer => ({ refuse: { reason: reason.replace(/[\u0000-\u001f\u007f]+/gu, ' ').slice(0, 240) } });
 const NONE = 'none';
 
+/**
+ * Environments known to pass the launch on unchanged (their manifest declares `keeps.launch`), so the rules file or
+ * argument reaches the agent there. CanvasTTY Environments' servers and containers leave out launch files and local
+ * paths (the rules file among them) and declare no `keeps.launch`; an environment of another plugin is not known here.
+ */
+const KEEPS_LAUNCH: ReadonlySet<string> = new Set(['canvastty-environments/worktree']);
+
+/** The card's note where the rules cannot travel with the launch. */
+export function notDeliveredBadge(kind: string): { text: string; tone: 'warn'; tooltip: string } {
+  const where = kind === 'ssh-host' ? 'server' : /container/u.test(kind) ? 'container' : 'environment';
+  return { text: 'Rules not delivered', tone: 'warn',
+    tooltip: `Project rules are not delivered on this ${where}: it does not pass the launch's files and arguments on. Give the agent the text of rules_for in its prompt if it needs them.` };
+}
+
 export class ContextService {
   readonly store: RulesStore;
   private readonly pluginId: string;
+  private readonly host: Host | undefined;
 
   constructor(options: { host?: Host; dataDir: string; pluginId?: string }) {
     this.store = new RulesStore(options.dataDir);
+    this.host = options.host;
     this.pluginId = options.pluginId ?? 'canvastty-context';
   }
 
@@ -124,6 +140,11 @@ export class ContextService {
     const options = context.options ?? {};
     if (options.send === false) return null;
     if (!isDeliveryCli(context.provider)) return refuse(`${context.provider} cannot receive rules at launch; turn off Send rules for it.`);
+    // The card starts without the rules (never blocked), and says so instead of dropping them silently.
+    if (context.environment && !KEEPS_LAUNCH.has(`${context.environment.pluginId}/${context.environment.kind}`)) {
+      void this.host?.callHost('cards.setBadge', { sessionId: context.sessionId, badge: notDeliveredBadge(context.environment.kind) }).catch(() => undefined);
+      return null;
+    }
     try {
       const result = this.resolve({ cli: context.provider, cwd: context.cwd,
         ...(typeof options.task === 'string' ? { taskId: options.task } : {}), ...(typeof options.category === 'string' ? { category: options.category } : {}),
@@ -165,7 +186,7 @@ export class ContextService {
         rules: result.included.map(rule => ({ scope: rule.scope, category: rule.category, key: rule.key, value: rule.value, source: rule.source })),
         omitted: result.omitted, text: result.text, notes: result.diagnostics.map(d => `${d.sourcePath}: ${d.message}`),
         launchOptions: { [this.pluginId]: { send: true, task: taskId ?? NONE, category: category ?? 'all', current: '' } },
-        howTo: `Rules apply in this order: the launch's own instruction, task, project, organization, user, defaults. To give a subagent these rules at launch, pass launchOptions to spawn_agent unchanged (provider claude, codex or grok; ${provider} gets them as ${DELIVERY[provider].how}).`
+        howTo: `Rules apply in this order: the launch's own instruction, task, project, organization, user, defaults. To give a subagent these rules at launch, pass launchOptions to spawn_agent unchanged (provider claude, codex or grok; ${provider} gets them as ${DELIVERY[provider].how}). They reach an agent on this computer or in a worktree; on a server or in a container the agent starts without them, so put the text in the prompt instead.`
       } };
     } catch (error) {
       return { content: errorText(error), isError: true };

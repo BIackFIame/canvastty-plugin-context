@@ -903,11 +903,22 @@ var RulesStore = class {
 var errorText = (error) => error instanceof Error ? error.message : String(error);
 var refuse = (reason) => ({ refuse: { reason: reason.replace(/[\u0000-\u001f\u007f]+/gu, " ").slice(0, 240) } });
 var NONE = "none";
+var KEEPS_LAUNCH = /* @__PURE__ */ new Set(["canvastty-environments/worktree"]);
+function notDeliveredBadge(kind) {
+  const where = kind === "ssh-host" ? "server" : /container/u.test(kind) ? "container" : "environment";
+  return {
+    text: "Rules not delivered",
+    tone: "warn",
+    tooltip: `Project rules are not delivered on this ${where}: it does not pass the launch's files and arguments on. Give the agent the text of rules_for in its prompt if it needs them.`
+  };
+}
 var ContextService = class {
   store;
   pluginId;
+  host;
   constructor(options) {
     this.store = new RulesStore(options.dataDir);
+    this.host = options.host;
     this.pluginId = options.pluginId ?? "canvastty-context";
   }
   /** The rules that apply to a folder (or a registered project), read now, sized for one agent CLI. */
@@ -998,6 +1009,10 @@ var ContextService = class {
     const options = context.options ?? {};
     if (options.send === false) return null;
     if (!isDeliveryCli(context.provider)) return refuse(`${context.provider} cannot receive rules at launch; turn off Send rules for it.`);
+    if (context.environment && !KEEPS_LAUNCH.has(`${context.environment.pluginId}/${context.environment.kind}`)) {
+      void this.host?.callHost("cards.setBadge", { sessionId: context.sessionId, badge: notDeliveredBadge(context.environment.kind) }).catch(() => void 0);
+      return null;
+    }
     try {
       const result = this.resolve({
         cli: context.provider,
@@ -1044,7 +1059,7 @@ var ContextService = class {
         text: result.text,
         notes: result.diagnostics.map((d) => `${d.sourcePath}: ${d.message}`),
         launchOptions: { [this.pluginId]: { send: true, task: taskId ?? NONE, category: category ?? "all", current: "" } },
-        howTo: `Rules apply in this order: the launch's own instruction, task, project, organization, user, defaults. To give a subagent these rules at launch, pass launchOptions to spawn_agent unchanged (provider claude, codex or grok; ${provider} gets them as ${DELIVERY[provider].how}).`
+        howTo: `Rules apply in this order: the launch's own instruction, task, project, organization, user, defaults. To give a subagent these rules at launch, pass launchOptions to spawn_agent unchanged (provider claude, codex or grok; ${provider} gets them as ${DELIVERY[provider].how}). They reach an agent on this computer or in a worktree; on a server or in a container the agent starts without them, so put the text in the prompt instead.`
       } };
     } catch (error) {
       return { content: errorText(error), isError: true };
