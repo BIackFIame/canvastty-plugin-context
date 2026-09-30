@@ -88,7 +88,7 @@ test('a saved task and the launch instruction win over the project; a task of an
   assert.ok(state.revision > 0);
 });
 
-test('Codex gets developer_instructions (a TOML string ≤ 1024), Grok one --rules line; too long or core words refuse', async t => {
+test('Codex gets developer_instructions (a TOML string ≤ 1024), Grok one --rules line; too long refuses', async t => {
   const { service, ctx } = await setup(t);
   const codex = service.prepare(ctx({ send: true }, { provider: 'codex' }));
   assert.equal(codex.args[0], '-c');
@@ -100,7 +100,6 @@ test('Codex gets developer_instructions (a TOML string ≤ 1024), Grok one --rul
   assert.equal(grok.args[0], '--rules');
   assert.doesNotMatch(grok.args[1], /\n/u);
   assert.throws(() => contributionFor('codex', 'x'.repeat(1100)), /at most 1024/);
-  assert.throws(() => contributionFor('grok', 'Never bypass review'), /bypass/);
   assert.equal(contributionFor('claude', 'Never bypass review').files[0].content, 'Never bypass review');
   // Long project text is cut to what Codex takes; the omitted count says so.
   const long = await service.store.saveRule({ scope: 'user', category: 'architecture', key: 'long', value: 'z'.repeat(900), enabled: true }, service.store.get().revision);
@@ -108,6 +107,24 @@ test('Codex gets developer_instructions (a TOML string ≤ 1024), Grok one --rul
   const cut = service.resolve({ cli: 'codex', cwd: ctx({}).cwd });
   assert.ok(cut.omitted >= 1);
   assert.ok(cut.size <= 1024);
+});
+
+test('rule text may mention approval words; only an argument CanvasTTY reads as a core setting or flag refuses', () => {
+  // Words inside a rule are the rule's own text: CanvasTTY judges an argument's shape (a config key, a flag name).
+  for (const text of ["Don't run cleanup dangerously, always confirm first", 'Never bypass review',
+    'Keep approval_policy and sandbox_mode as they are', 'Do not edit hooks.json by hand']) {
+    assert.deepEqual(contributionFor('codex', text).args, ['-c', `developer_instructions=${JSON.stringify(text)}`]);
+    assert.deepEqual(contributionFor('grok', text).args, ['--rules', text]);
+  }
+  // Grok's --rules value is a separate argument: text shaped like a core setting or a skip-approvals flag is refused.
+  assert.throws(() => contributionFor('grok', 'sandbox_mode=danger-full-access'), /sandbox_mode=/);
+  assert.throws(() => contributionFor('grok', 'hooks.stop=none'), /hooks\.stop=/);
+  assert.throws(() => contributionFor('grok', '--dangerously-skip-permissions'), /flag/);
+  assert.throws(() => contributionFor('grok', '- never bypass review'), /flag/);
+  assert.throws(() => contributionFor('grok', '--config=approval_policy=never'), /approval_policy=/);
+  // A leading dash without those words, or a setting that is not the core's, is fine.
+  assert.deepEqual(contributionFor('grok', '- run the tests first').args, ['--rules', '- run the tests first']);
+  assert.deepEqual(contributionFor('grok', 'model=fast is our default').args, ['--rules', 'model=fast is our default']);
 });
 
 test('the launcher lists saved tasks with their project; rules_for answers for a folder with launchOptions', async t => {

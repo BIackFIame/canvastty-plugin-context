@@ -415,7 +415,29 @@ var TOKEN_PRESETS = [
 var DELIVERY_CLIS = ["claude", "codex", "grok"];
 var isDeliveryCli = (value) => DELIVERY_CLIS.includes(value);
 var MAX_ARG = 1024;
-var CORE_WORDS = /dangerously|approval_policy|approvals_reviewer|sandbox_mode|bypass|^hooks[.=]/iu;
+var CORE_CONFIG_KEY = /dangerously|approval_policy|approvals_reviewer|sandbox_mode|sandbox_workspace_write|bypass|^hooks(?:\.|$)/iu;
+var CORE_FLAG_WORDS = /dangerously|bypass/iu;
+var CONFIG_PAIR = /^([A-Za-z0-9_][A-Za-z0-9_.-]*)=/u;
+var BARE_FLAG = /^-{1,2}[A-Za-z][\w-]*$/u;
+function coreRefusal(arg) {
+  const configKey = (text) => {
+    const key2 = CONFIG_PAIR.exec(text)?.[1];
+    return key2 !== void 0 && CORE_CONFIG_KEY.test(key2) ? key2 : null;
+  };
+  if (arg.startsWith("-")) {
+    const inline = arg.startsWith("--config=") ? arg.slice("--config=".length) : /^-c[^=-]/u.test(arg) ? arg.slice(2) : null;
+    const key2 = inline === null ? null : configKey(inline);
+    if (key2) return `starts with the setting "${key2}=", which CanvasTTY keeps for itself`;
+    const flag = arg.split("=", 1)[0];
+    const word = CORE_FLAG_WORDS.exec(flag)?.[0];
+    if (word || inline === null && BARE_FLAG.test(flag)) {
+      return `starts with "-", so CanvasTTY reads it as a command-line flag${word ? ` with "${word}"` : ""}`;
+    }
+    return null;
+  }
+  const key = configKey(arg);
+  return key ? `starts with the setting "${key}=", which CanvasTTY keeps for itself` : null;
+}
 var tomlString = (text) => JSON.stringify(text).replace(/\u007f/gu, "\\u007f");
 var codexArg = (text) => `developer_instructions=${tomlString(text)}`;
 var oneLine = (text) => text.replace(/\s+/gu, " ").trim();
@@ -433,8 +455,8 @@ function contributionFor(cli, text) {
   }
   const arg = cli === "codex" ? codexArg(text) : oneLine(text);
   if (arg.length > MAX_ARG) throw new Error(`The rules are ${arg.length} characters as one argument; ${cli === "codex" ? "Codex" : "Grok"} takes at most ${MAX_ARG} at launch.`);
-  const word = CORE_WORDS.exec(arg)?.[0];
-  if (word) throw new Error(`A rule contains "${word}", which CanvasTTY never lets a plugin pass to ${cli === "codex" ? "Codex" : "Grok"} as an argument; reword it or turn off Send rules.`);
+  const reason = coreRefusal(arg);
+  if (reason) throw new Error(`The rules as ${cli === "codex" ? "Codex" : "Grok"}'s argument ${reason}; reword the first rule or turn off Send rules.`);
   return { ...base, args: cli === "codex" ? ["-c", arg] : ["--rules", arg] };
 }
 
