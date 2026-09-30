@@ -194,3 +194,19 @@ test('Find project files lists the known convention files, Cursor rules and top-
     'AGENTS.md:instructions:true', 'CLAUDE.md:instructions:false', 'README.md:readme:false', 'src/styles/theme.css:css:false'
   ]);
 });
+
+test('an import checks the project folder once, not once per selected file', async t => {
+  const files = Object.fromEntries(Array.from({ length: 6 }, (_, n) => [`.cursor/rules/rule-${n}.mdc`, `Rule number ${n}.`]));
+  const { cwd, read } = await fixture(t, files, Object.keys(files).map(path => ({ path, kind: 'instructions' })));
+  const fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const calls = { lstat: 0, realpath: 0 };
+  const lstat = fs.lstatSync, realpath = fs.realpathSync;
+  fs.lstatSync = (path, ...rest) => { if (path === cwd) calls.lstat++; return lstat(path, ...rest); };
+  fs.realpathSync = (path, ...rest) => { if (path === cwd) calls.realpath++; return realpath(path, ...rest); };
+  syncBuiltinESMExports();
+  let imported;
+  try { imported = read(); } finally { fs.lstatSync = lstat; fs.realpathSync = realpath; syncBuiltinESMExports(); }
+  assert.equal(imported.rules.length, 6);
+  assert.deepEqual(calls, { lstat: 1, realpath: 1 });
+});

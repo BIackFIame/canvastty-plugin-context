@@ -4,7 +4,7 @@
 // files over 64 KB or 256 KB in total. Executable configs are never run. YAML configs are listed, not parsed (the
 // plugin bundles no YAML parser); JSON ones are imported.
 import { createHash } from 'node:crypto';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, type Stats } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import {
   bytes, checkImports, checkRule, checkText, importNameSupported, MAX_RULES,
@@ -17,16 +17,27 @@ export const within = (root: string, path: string): boolean => { const part = re
 
 /** device:inode:owner of a canonical folder this user owns; a replaced folder gets a new identity. */
 export function rootIdentity(path: string): string {
-  const s = lstatSync(path);
-  if (!s.isDirectory() || realpathSync(path) !== path || process.getuid && s.uid !== process.getuid()) throw new Error('The project folder must be a real folder you own (not a link).');
+  const s = rootStat(path);
   return `${s.dev}:${s.ino}:${s.uid}`;
 }
 
-function readSource(project: Project, entry: ImportSource, projects: readonly Project[]): string | undefined {
-  if (rootIdentity(project.root) !== project.rootIdentity) throw new Error(`The folder of ${project.label} was replaced; add the project again.`);
+function rootStat(path: string): Stats {
+  const s = lstatSync(path);
+  if (!s.isDirectory() || realpathSync(path) !== path || process.getuid && s.uid !== process.getuid()) throw new Error('The project folder must be a real folder you own (not a link).');
+  return s;
+}
+
+/** The project's folder, checked to be the one registered (not replaced since); its stat for the per-file checks. */
+function verifiedRoot(project: Project): Stats {
+  const s = rootStat(project.root);
+  if (`${s.dev}:${s.ino}:${s.uid}` !== project.rootIdentity) throw new Error(`The folder of ${project.label} was replaced; add the project again.`);
+  return s;
+}
+
+/** One selected file; `rootStat` comes from verifiedRoot, checked once per import rather than once per file. */
+function readSource(project: Project, rootStat: Stats, entry: ImportSource, projects: readonly Project[]): string | undefined {
   const target = join(project.root, entry.path);
   if (projects.some(p => p.id !== project.id && p.root.length > project.root.length && within(project.root, p.root) && within(p.root, target))) throw new Error(`${entry.path} belongs to another registered project inside this one.`);
-  const rootStat = lstatSync(project.root);
   try {
     let parent = project.root;
     for (const component of entry.path.split('/').slice(0, -1)) {
@@ -64,9 +75,10 @@ export function importProject(project: Project | undefined, projects: readonly P
   const rules: Rule[] = [], diagnostics: ImportDiagnostic[] = [];
   if (!project?.imports?.length) return { rules, diagnostics };
   checkImports(project.imports);
+  const root = verifiedRoot(project);
   let total = 0;
   for (const entry of project.imports) {
-    const text = readSource(project, entry, projects);
+    const text = readSource(project, root, entry, projects);
     const diagnostic = (status: ImportDiagnostic['status'], message: string): void => { diagnostics.push({ sourcePath: entry.path, status, message }); };
     if (text === undefined) { diagnostic('missing', 'The file is gone; it adds no rules.'); continue; }
     total += bytes(text);

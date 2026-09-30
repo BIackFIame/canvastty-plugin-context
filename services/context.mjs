@@ -8,7 +8,9 @@ var RPC_LIMITS = Object.freeze({
   hostCalls: 64,
   activeHandlers: 64,
   /** CanvasTTY waits 2 s after canvastty.shutdown before SIGTERM. */
-  drainMs: 1500
+  drainMs: 1500,
+  /** Events and logs held while the host is not reading, at most. */
+  outboundBytes: 8 * 1048576
 });
 function serve({ methods, notifications = {}, onInitialize, input = process.stdin, output = process.stdout, exit = (code) => process.exit(code), limits = {} }) {
   const limit = { ...RPC_LIMITS, ...limits };
@@ -18,9 +20,60 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
   let stopping = false;
   let hostGone = false;
   let onIdle = null;
-  const send = (message) => {
-    output.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}
-`);
+  const queue = [];
+  let held = 0;
+  let blocked = false;
+  let dropped = 0;
+  let onFlushed = null;
+  const write = (text) => {
+    if (output.write(text) === false && typeof output.once === "function") {
+      blocked = true;
+      output.once("drain", flush);
+    }
+  };
+  function flush() {
+    blocked = false;
+    while (queue.length && !blocked) {
+      const frame = queue.shift();
+      if (frame.droppable) held -= frame.bytes;
+      write(frame.text);
+    }
+    if (blocked) return;
+    if (dropped) {
+      const count = dropped;
+      dropped = 0;
+      send({ method: "log", params: { level: "warn", message: `Dropped ${count} events or logs while the host was not reading.` } }, true);
+    }
+    if (!blocked && !queue.length) onFlushed?.();
+  }
+  const send = (message, droppable = false) => {
+    const text = `${JSON.stringify({ jsonrpc: "2.0", ...message })}
+`;
+    const bytes2 = Buffer.byteLength(text);
+    if (bytes2 > limit.frameBytes && message.method !== "log") return false;
+    if (!blocked) {
+      write(text);
+      return true;
+    }
+    if (droppable) {
+      for (let at = 0; held + bytes2 > limit.outboundBytes && at < queue.length; ) {
+        const frame = queue[at];
+        if (!frame.droppable) {
+          at++;
+          continue;
+        }
+        held -= frame.bytes;
+        queue.splice(at, 1);
+        dropped++;
+      }
+      if (held + bytes2 > limit.outboundBytes) {
+        dropped++;
+        return true;
+      }
+      held += bytes2;
+    }
+    queue.push({ text, bytes: bytes2, droppable });
+    return true;
   };
   const host = {
     callHost: (method, params) => new Promise((resolve, reject) => {
@@ -38,10 +91,18 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
         reject(new Error(`The host did not answer ${method} in time.`));
       }, limit.hostCallMs);
       pending.set(id, { resolve, reject, timer });
-      send({ id, method, params });
+      if (!send({ id, method, params })) {
+        clearTimeout(timer);
+        pending.delete(id);
+        reject(new Error(`The ${method} request is larger than the frame limit.`));
+      }
     }),
-    log: (level, message) => send({ method: "log", params: { level, message: String(message).slice(0, 500) } }),
-    emit: (event, data) => send({ method: "event", params: { event, data } })
+    log: (level, message) => {
+      send({ method: "log", params: { level, message: String(message).slice(0, 500) } }, true);
+    },
+    emit: (event, data) => {
+      if (!send({ method: "event", params: { event, data } }, true)) host.log("warn", `Dropped a ${String(event).slice(0, 80)} event larger than the frame limit.`);
+    }
   };
   const record = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const errorText2 = (error) => error instanceof Error ? error.message : String(error);
@@ -55,10 +116,17 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
   const stop = () => {
     if (stopping) return;
     stopping = true;
-    const timer = setTimeout(() => exit(0), limit.drainMs);
-    onIdle = () => {
+    let exited = false;
+    const finish = () => {
+      if (exited) return;
+      exited = true;
       clearTimeout(timer);
       exit(0);
+    };
+    const timer = setTimeout(finish, limit.drainMs);
+    onIdle = () => {
+      if (blocked || queue.length) onFlushed = finish;
+      else finish();
     };
     if (active === 0) onIdle();
   };
@@ -98,7 +166,9 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
         if (!handler) throw Object.assign(new Error(`Unknown method: ${method}`), { code: -32601 });
         return handler(record(message.params), host);
       }).then(
-        (result) => send({ id: message.id, result: result ?? null }),
+        (result) => {
+          if (!send({ id: message.id, result: result ?? null })) send({ id: message.id, error: { code: -32e3, message: "The answer is larger than the frame limit." } });
+        },
         (error2) => send({ id: message.id, error: { code: error2?.code ?? -32e3, message: errorText2(error2).slice(0, 400) } })
       );
       return;
@@ -380,26 +450,33 @@ var within = (root, path) => {
   return !isAbsolute(part) && part !== ".." && !part.startsWith(`..${sep}`);
 };
 function rootIdentity(path) {
-  const s = lstatSync(path);
-  if (!s.isDirectory() || realpathSync(path) !== path || process.getuid && s.uid !== process.getuid()) throw new Error("The project folder must be a real folder you own (not a link).");
+  const s = rootStat(path);
   return `${s.dev}:${s.ino}:${s.uid}`;
 }
-function readSource(project, entry, projects) {
-  if (rootIdentity(project.root) !== project.rootIdentity) throw new Error(`The folder of ${project.label} was replaced; add the project again.`);
+function rootStat(path) {
+  const s = lstatSync(path);
+  if (!s.isDirectory() || realpathSync(path) !== path || process.getuid && s.uid !== process.getuid()) throw new Error("The project folder must be a real folder you own (not a link).");
+  return s;
+}
+function verifiedRoot(project) {
+  const s = rootStat(project.root);
+  if (`${s.dev}:${s.ino}:${s.uid}` !== project.rootIdentity) throw new Error(`The folder of ${project.label} was replaced; add the project again.`);
+  return s;
+}
+function readSource(project, rootStat2, entry, projects) {
   const target = join(project.root, entry.path);
   if (projects.some((p) => p.id !== project.id && p.root.length > project.root.length && within(project.root, p.root) && within(p.root, target))) throw new Error(`${entry.path} belongs to another registered project inside this one.`);
-  const rootStat = lstatSync(project.root);
   try {
     let parent = project.root;
     for (const component of entry.path.split("/").slice(0, -1)) {
       parent = join(parent, component);
       const s = lstatSync(parent);
-      if (!s.isDirectory() || s.isSymbolicLink() || s.dev !== rootStat.dev || s.uid !== rootStat.uid || realpathSync(parent) !== parent) throw new Error("unsafe folder");
+      if (!s.isDirectory() || s.isSymbolicLink() || s.dev !== rootStat2.dev || s.uid !== rootStat2.uid || realpathSync(parent) !== parent) throw new Error("unsafe folder");
     }
     const fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const before = fstatSync(fd);
-      if (!before.isFile() || before.nlink !== 1 || before.dev !== rootStat.dev || before.uid !== rootStat.uid || before.size > MAX_FILE_BYTES) throw new Error("unsafe or too large file");
+      if (!before.isFile() || before.nlink !== 1 || before.dev !== rootStat2.dev || before.uid !== rootStat2.uid || before.size > MAX_FILE_BYTES) throw new Error("unsafe or too large file");
       const now = lstatSync(target);
       if (now.dev !== before.dev || now.ino !== before.ino || realpathSync(target) !== target) throw new Error("changed while opening");
       const data = Buffer.alloc(before.size + 1);
@@ -426,9 +503,10 @@ function importProject(project, projects, room = MAX_RULES) {
   const rules = [], diagnostics = [];
   if (!project?.imports?.length) return { rules, diagnostics };
   checkImports(project.imports);
+  const root = verifiedRoot(project);
   let total = 0;
   for (const entry of project.imports) {
-    const text = readSource(project, entry, projects);
+    const text = readSource(project, root, entry, projects);
     const diagnostic = (status, message) => {
       diagnostics.push({ sourcePath: entry.path, status, message });
     };
