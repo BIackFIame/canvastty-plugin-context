@@ -1,6 +1,6 @@
 # CanvasTTY Context
 
-> **Status: preview.** This plugin needs CanvasTTY plugin API v2 (plugin services, launch contributors, session environments, decision hooks, plugin tools and card actions). Those extension points are proposed upstream and are not in a released CanvasTTY yet, so installing it on a current release fails the manifest check.
+> **Requires the CanvasTTY core with plugin API v2** (plugin services, launch contributors, session environments, decision hooks, plugin tools and card actions, `launch.delegable` and `cards:decorate`): the upcoming release after 1.7.0. CanvasTTY 1.7.0 and earlier do not have these extension points, so installing it there fails the manifest check.
 
 Project rules for agents in [CanvasTTY](https://github.com/howdeploy/CanvasTTY): the conventions you would otherwise
 repeat in every prompt, kept per project and sent to an agent when you launch it.
@@ -43,12 +43,16 @@ Rules that do not fit are left out whole and the preview says how many; a securi
 instruction that does not fit refuses the launch with the reason instead. Other agents have no launch flag for this and
 are not offered the option.
 
+CanvasTTY refuses plugin arguments that set its own approvals, sandbox or hooks, so the Codex and Grok argument is
+judged by its shape the same way: a rule may say "never bypass review", but rules whose text starts like such a setting
+(`sandbox_mode=…`) or like a command-line flag are refused with the reason; reword the first rule.
+
 ## Orchestrators
 
 `canvastty-context__rules_for` (orchestrators and subagents) answers which rules apply to a folder (default: the
 caller's), optionally for a saved task or one category: the rules in order, the exact text, and `launchOptions` to pass
 to `spawn_agent` so a Claude Code, Codex or Grok subagent gets them at launch. The launch options are declared
-`delegable`: they only choose which rules are added to the agent's prompt, never a permission.
+delegable (`launch.delegable`; CanvasTTY refuses undeclared ones in `spawn_agent`): they only choose which rules are added to the agent's prompt, never a permission.
 
 ## Servers and containers
 
@@ -62,7 +66,10 @@ passes the launch on. The badge needs the `cards:decorate` permission.
 ## Storage
 
 Projects, tasks and rules live in `rules/rules.json` (private file) in the plugin's data folder, apart from any
-settings; every change is checked against the revision the settings page last read. Uninstalling the plugin removes it.
+settings; every change takes `rules/rules.lock` and is checked against the revision stored in the file, so a second writer on
+the same folder is refused instead of overwritten (a lock left behind is taken over after 30 s). Uninstalling the plugin removes it.
+Between the service and CanvasTTY a frame is at most 1 MiB, a host call fails after 30 s or past 64 in flight, and
+waiting events and logs are capped at 8 MiB.
 
 ## Not ported from CanvasTTY #68
 
