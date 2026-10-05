@@ -76,7 +76,7 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
     return true;
   };
   const host = {
-    callHost: (method, params) => new Promise((resolve, reject) => {
+    callHost: (method, params) => new Promise((resolve2, reject) => {
       if (hostGone) {
         reject(new Error("The host connection is closed."));
         return;
@@ -90,7 +90,7 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
         pending.delete(id);
         reject(new Error(`The host did not answer ${method} in time.`));
       }, limit.hostCallMs);
-      pending.set(id, { resolve, reject, timer });
+      pending.set(id, { resolve: resolve2, reject, timer });
       if (!send({ id, method, params })) {
         clearTimeout(timer);
         pending.delete(id);
@@ -226,6 +226,9 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
   input.on("end", closed);
   input.on("error", closed);
 }
+
+// src/service/context.ts
+import { randomUUID as randomUUID3 } from "node:crypto";
 
 // src/shared/rules.ts
 var CATEGORIES = ["design", "architecture", "code-style", "security", "testing", "deployment", "documentation", "business-rules", "naming", "dependencies", "communication"];
@@ -412,7 +415,7 @@ var TOKEN_PRESETS = [
 ];
 
 // src/service/delivery.ts
-var DELIVERY_CLIS = ["claude", "codex", "grok"];
+var DELIVERY_CLIS = ["claude", "codex", "grok", "qwen", "pi"];
 var isDeliveryCli = (value) => DELIVERY_CLIS.includes(value);
 var MAX_ARG = 1024;
 var CORE_CONFIG_KEY = /dangerously|approval_policy|approvals_reviewer|sandbox_mode|sandbox_workspace_write|bypass|^hooks(?:\.|$)/iu;
@@ -446,18 +449,25 @@ var DELIVERY = {
   claude: { how: "a file appended to the system prompt (--append-system-prompt-file)", budget: 24 * 1024, measure: bytes },
   // Codex developer instructions (-c developer_instructions=…), next to AGENTS.md, not instead of it.
   codex: { how: "developer instructions (-c developer_instructions=\u2026)", budget: MAX_ARG, measure: (text) => codexArg(text).length },
-  grok: { how: "rules appended to the system prompt (--rules)", budget: MAX_ARG, measure: (text) => oneLine(text).length }
+  grok: { how: "rules appended to the system prompt (--rules)", budget: MAX_ARG, measure: (text) => oneLine(text).length },
+  // These official per-run flags append text after the CLI's own/context instructions; no shared config is changed.
+  qwen: { how: "per-run system prompt addition (--append-system-prompt)", budget: MAX_ARG, measure: (text) => oneLine(text).length },
+  // Pi interprets an existing-file argument as a path; the prefixed text below cannot be such a path.
+  pi: { how: "per-run system prompt addition (--append-system-prompt)", budget: MAX_ARG, measure: (text) => oneLine(`CanvasTTY Context rules and approved memory: ${text}`).length }
 };
 function contributionFor(cli, text) {
   const base = { env: {}, secretEnv: {}, args: [], files: [] };
   if (cli === "claude") {
     return { ...base, args: ["--append-system-prompt-file", "{launchFiles}/rules.md"], files: [{ relPath: "rules.md", content: text }] };
   }
-  const arg = cli === "codex" ? codexArg(text) : oneLine(text);
-  if (arg.length > MAX_ARG) throw new Error(`The rules are ${arg.length} characters as one argument; ${cli === "codex" ? "Codex" : "Grok"} takes at most ${MAX_ARG} at launch.`);
+  const prompt = cli === "pi" ? `CanvasTTY Context rules and approved memory: ${text}` : text;
+  const arg = cli === "codex" ? codexArg(text) : oneLine(prompt);
+  const label = cli === "codex" ? "Codex" : cli === "grok" ? "Grok" : cli === "qwen" ? "Qwen Code" : "Pi";
+  if (arg.length > MAX_ARG) throw new Error(`The rules are ${arg.length} characters as one argument; ${label} takes at most ${MAX_ARG} at launch.`);
   const reason = coreRefusal(arg);
-  if (reason) throw new Error(`The rules as ${cli === "codex" ? "Codex" : "Grok"}'s argument ${reason}; reword the first rule or turn off Send rules.`);
-  return { ...base, args: cli === "codex" ? ["-c", arg] : ["--rules", arg] };
+  if (reason) throw new Error(`The rules as ${cli === "codex" ? "Codex" : cli === "grok" ? "Grok" : cli === "qwen" ? "Qwen Code" : "Pi"}'s argument ${reason}; reword the first rule or turn off Send rules.`);
+  const args = cli === "codex" ? ["-c", arg] : cli === "grok" ? ["--rules", arg] : ["--append-system-prompt", arg];
+  return { ...base, args };
 }
 
 // src/service/importer.ts
@@ -806,7 +816,7 @@ import { isAbsolute as isAbsolute2, join as join2 } from "node:path";
 var MAX_BYTES = 8 * 1024 * 1024;
 var LOCK_WAIT_MS = 3e3;
 var LOCK_STALE_MS = 3e4;
-var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+var sleep = (ms) => new Promise((resolve2) => setTimeout(resolve2, ms));
 var RulesStore = class {
   folder;
   value;
@@ -999,10 +1009,170 @@ var RulesStore = class {
   }
 };
 
+// src/service/memory.ts
+import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
+import { constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync2, openSync as openSync3, readFileSync as readFileSync2, closeSync as closeSync3, realpathSync as realpathSync3 } from "node:fs";
+import { chmod as chmod2, lstat as lstat2, mkdir as mkdir2, open as open2, rename as rename2, rm as rm2 } from "node:fs/promises";
+import { join as join3, resolve } from "node:path";
+var MAX_FILE_BYTES2 = 256 * 1024;
+var MAX_RECORDS = 200;
+var MAX_RECORD_BYTES = 1500;
+function validateRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value;
+  return typeof record.id === "string" && /^[a-f0-9-]{36}$/iu.test(record.id) && typeof record.text === "string" && Buffer.byteLength(record.text, "utf8") <= MAX_RECORD_BYTES && typeof record.author === "string" && record.author.length <= 80 && Number.isSafeInteger(record.createdAt) && typeof record.approved === "boolean";
+}
+var ProjectMemoryStore = class {
+  root;
+  identity;
+  projectId;
+  directory;
+  file;
+  legacyFile;
+  writes = Promise.resolve();
+  constructor(project, dataDir) {
+    this.root = realpathSync3(project.root);
+    this.identity = project.rootIdentity;
+    this.projectId = project.id;
+    if (this.root !== project.root || rootIdentity(this.root) !== this.identity) throw new Error("The registered project root changed; add it again.");
+    this.directory = join3(realpathSync3(resolve(dataDir)), "memory");
+    const name = createHash2("sha256").update(`${this.projectId}\0${this.root}\0${this.identity}`).digest("hex");
+    this.file = join3(this.directory, `${name}.json`);
+    this.legacyFile = join3(this.root, ".canvastty", "memory.json");
+  }
+  async read() {
+    await this.checkDirectory(true);
+    let fd;
+    try {
+      fd = openSync3(this.file, constants3.O_RDONLY | constants3.O_NOFOLLOW | constants3.O_NONBLOCK);
+      const stat2 = fstatSync3(fd);
+      if (!stat2.isFile() || stat2.size > MAX_FILE_BYTES2 || stat2.mode & 63 || process.getuid && stat2.uid !== process.getuid()) throw new Error("Project memory must be a private regular file under 256 KiB.");
+      const raw = readFileSync2(fd, "utf8");
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Project memory file is invalid.");
+      const value = parsed;
+      if (value.version !== 2 || value.projectId !== this.projectId || value.projectRoot !== this.root || value.projectIdentity !== this.identity || !Array.isArray(value.records) || value.records.length > MAX_RECORDS || value.records.some((record) => !validateRecord(record))) {
+        throw new Error("Project memory file is invalid or belongs to a different folder.");
+      }
+      return structuredClone(value.records);
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        const records = this.readLegacyPending();
+        await this.write(records);
+        return structuredClone(records);
+      }
+      if (error.code === "ELOOP") throw new Error("Project memory cannot be a symbolic link.");
+      throw error;
+    } finally {
+      if (fd !== void 0) closeSync3(fd);
+    }
+  }
+  save(records) {
+    const operation = this.writes.catch(() => void 0).then(async () => {
+      if (records.length > MAX_RECORDS || records.some((record) => !validateRecord(record))) throw new Error("Project memory is too large or invalid.");
+      await this.write(records);
+    });
+    this.writes = operation;
+    return operation;
+  }
+  async checkDirectory(create) {
+    if (create) await mkdir2(this.directory, { recursive: true, mode: 448 }).catch((error) => {
+      if (error.code !== "EEXIST" && error.code !== "ENOENT") throw error;
+      if (error.code === "ENOENT") throw error;
+    });
+    let info;
+    try {
+      info = await lstat2(this.directory);
+    } catch (error) {
+      if (error.code === "ENOENT" && !create) return;
+      throw error;
+    }
+    if (!info.isDirectory() || info.isSymbolicLink() || process.getuid && info.uid !== process.getuid()) throw new Error("The plugin memory folder must be a real folder owned by this user.");
+    if (info.mode & 63) await chmod2(this.directory, 448);
+    const real = realpathSync3(this.directory);
+    if (within(this.root, real) || real !== this.directory) throw new Error("The plugin memory folder must be private and outside the registered project.");
+    const rootNow = realpathSync3(this.root);
+    if (rootNow !== this.root || rootIdentity(rootNow) !== this.identity) throw new Error("The registered project root changed; add it again.");
+  }
+  readLegacyPending() {
+    let fd;
+    try {
+      const directory = join3(this.root, ".canvastty");
+      const folder = lstatSync2(directory);
+      if (!folder.isDirectory() || folder.isSymbolicLink() || process.getuid && folder.uid !== process.getuid() || realpathSync3(directory) !== directory) return [];
+      fd = openSync3(this.legacyFile, constants3.O_RDONLY | constants3.O_NOFOLLOW | constants3.O_NONBLOCK);
+      const stat2 = fstatSync3(fd);
+      if (!stat2.isFile() || stat2.nlink !== 1 || stat2.dev !== folder.dev || stat2.uid !== folder.uid || stat2.size > MAX_FILE_BYTES2) return [];
+      const parsed = JSON.parse(readFileSync2(fd, "utf8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+      const value = parsed;
+      if (value.version !== 1 || value.projectRoot !== this.root || !Array.isArray(value.records) || value.records.length > MAX_RECORDS || value.records.some((record) => !validateRecord(record))) return [];
+      return structuredClone(value.records).map((record) => ({ ...record, approved: false }));
+    } catch {
+      return [];
+    } finally {
+      if (fd !== void 0) closeSync3(fd);
+    }
+  }
+  async write(records) {
+    await this.checkDirectory(true);
+    const raw = JSON.stringify({ version: 2, projectId: this.projectId, projectRoot: this.root, projectIdentity: this.identity, records });
+    if (Buffer.byteLength(raw, "utf8") > MAX_FILE_BYTES2) throw new Error("Project memory is over 256 KiB.");
+    const temporary = join3(this.directory, `${randomUUID2()}.tmp`);
+    const file = await open2(temporary, "wx", 384);
+    try {
+      await file.writeFile(raw);
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    try {
+      await rename2(temporary, this.file);
+    } catch (error) {
+      await rm2(temporary, { force: true });
+      throw error;
+    }
+    await chmod2(this.file, 384);
+  }
+};
+function cleanMemoryText(value) {
+  if (typeof value !== "string") throw new Error("Memory text must be text.");
+  const text = value.replace(/[\u0000-\u0008\u000B-\u001F\u007F]/gu, "").trim();
+  if (!text || Buffer.byteLength(text, "utf8") > MAX_RECORD_BYTES) throw new Error("Memory text must be 1\u20131500 UTF-8 bytes.");
+  return text;
+}
+function truncateUtf8(text, maxBytes) {
+  let result = "";
+  let bytes2 = 0;
+  for (const character of text) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes2 + size > maxBytes) break;
+    result += character;
+    bytes2 += size;
+  }
+  return result;
+}
+
 // src/service/context.ts
 var errorText = (error) => error instanceof Error ? error.message : String(error);
 var refuse = (reason) => ({ refuse: { reason: reason.replace(/[\u0000-\u001f\u007f]+/gu, " ").slice(0, 240) } });
 var NONE = "none";
+var MEMORY_POLICY_KEY = "memory-policy";
+function appendMemory(rules, summary, cli) {
+  const measure = DELIVERY[cli].measure;
+  const characters = [...summary];
+  let low = 0, high = characters.length, best = rules;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const piece = characters.slice(0, middle).join("");
+    const candidate = [rules, piece].filter(Boolean).join("\n\n");
+    if (measure(candidate) <= DELIVERY[cli].budget) {
+      best = candidate;
+      low = middle + 1;
+    } else high = middle - 1;
+  }
+  return best;
+}
 var KEEPS_LAUNCH = /* @__PURE__ */ new Set(["canvastty-environments/worktree"]);
 function notDeliveredBadge(kind) {
   const where = kind === "ssh-host" ? "server" : /container/u.test(kind) ? "container" : "environment";
@@ -1012,14 +1182,37 @@ function notDeliveredBadge(kind) {
     tooltip: `Project rules are not delivered on this ${where}: it does not pass the launch's files and arguments on. Give the agent the text of rules_for in its prompt if it needs them.`
   };
 }
+function unsupportedCliBadge(provider) {
+  const label = provider.replace(/[^A-Za-z0-9 -]/gu, "").slice(0, 24) || "this CLI";
+  return {
+    text: "Rules not delivered",
+    tone: "warn",
+    tooltip: `Project rules and memory are not sent to ${label}: no safe per-run instruction channel is verified. Put rules_for or recall in its task if needed.`
+  };
+}
 var ContextService = class {
   store;
   pluginId;
   host;
+  dataDir;
+  requireMemoryApproval = true;
+  projectMemories = /* @__PURE__ */ new Map();
+  memoryWrites = /* @__PURE__ */ new Map();
   constructor(options) {
     this.store = new RulesStore(options.dataDir);
+    this.dataDir = options.dataDir;
     this.host = options.host;
     this.pluginId = options.pluginId ?? "canvastty-context";
+  }
+  async loadMemoryPolicy() {
+    if (!this.host) return;
+    try {
+      const saved = await this.host.callHost("storage.get", { key: MEMORY_POLICY_KEY });
+      if (saved && typeof saved === "object" && typeof saved.requireApproval === "boolean") {
+        this.requireMemoryApproval = saved.requireApproval;
+      }
+    } catch {
+    }
   }
   /** The rules that apply to a folder (or a registered project), read now, sized for one agent CLI. */
   resolve(want) {
@@ -1082,7 +1275,13 @@ var ContextService = class {
     return { ...result, included: result.included.map((rule) => ({ scope: rule.scope, category: rule.category, key: rule.key, source: rule.source })) };
   }
   saveProject(params) {
-    return this.store.saveProject(params.project, Number(params.revision));
+    const input = params.project;
+    const before = input?.id ? this.store.get().projects.find((project) => project.id === input.id) : void 0;
+    return this.store.saveProject(input, Number(params.revision)).then((state) => {
+      const after = input.id ? state.projects.find((project) => project.id === input.id) : void 0;
+      if (before && after && before.root !== after.root) this.projectMemories.delete(before.id);
+      return state;
+    });
   }
   saveImports(params) {
     return this.store.saveImports(String(params.projectId), params.imports, Number(params.revision));
@@ -1104,37 +1303,172 @@ var ContextService = class {
     return { task: state.tasks.slice(0, 64).map((task) => ({ value: task.id, label: label(task) })) };
   }
   /** `canvastty.launch.prepare`: "Send rules" on → the rules for the card's folder, delivered the CLI's way. */
-  prepare(context) {
+  async prepare(context) {
     if (context.chosen === false) return null;
     const options = context.options ?? {};
     if (options.send === false) return null;
-    if (!isDeliveryCli(context.provider)) return refuse(`${context.provider} cannot receive rules at launch; turn off Send rules for it.`);
+    if (!isDeliveryCli(context.provider)) {
+      void this.host?.callHost("cards.setBadge", { sessionId: context.sessionId, badge: unsupportedCliBadge(context.provider) }).catch(() => void 0);
+      return null;
+    }
     if (context.environment && !KEEPS_LAUNCH.has(`${context.environment.pluginId}/${context.environment.kind}`)) {
       void this.host?.callHost("cards.setBadge", { sessionId: context.sessionId, badge: notDeliveredBadge(context.environment.kind) }).catch(() => void 0);
       return null;
     }
     try {
+      const projectRoot = context.projectRoot ?? context.cwd;
       const result = this.resolve({
         cli: context.provider,
-        cwd: context.cwd,
+        cwd: projectRoot,
         ...typeof options.task === "string" ? { taskId: options.task } : {},
         ...typeof options.category === "string" ? { category: options.category } : {},
         ...typeof options.current === "string" ? { current: options.current } : {}
       });
-      if (!result.text) return null;
-      return contributionFor(context.provider, result.text);
+      const memory = await this.memorySummary(projectRoot);
+      const combined = memory ? appendMemory(result.text, memory, context.provider) : result.text;
+      if (!combined) return null;
+      return contributionFor(context.provider, combined);
     } catch (error) {
       return refuse(errorText(error));
     }
   }
   // ---- orchestrator tool ----
-  tool(name, input, caller) {
+  async memoryState(projectId) {
+    const project = this.project(projectId);
+    return { project: { id: project.id, label: project.label, root: project.root }, records: await this.memoryStore(project).read(), requireApproval: this.requireMemoryApproval };
+  }
+  async saveMemory(params) {
+    const project = this.project(params.projectId);
+    return this.serialMemory(project.id, async () => {
+      const memory = this.memoryStore(project);
+      const records = await memory.read();
+      const id = typeof params.id === "string" ? params.id : void 0;
+      const existing = id ? records.find((record2) => record2.id === id) : void 0;
+      if (id && !existing) throw new Error("Unknown memory item.");
+      const text = await this.maskMemory(cleanMemoryText(params.text));
+      const record = { id: existing?.id ?? randomUUID3(), text, author: "person", createdAt: Date.now(), approved: true };
+      await memory.save([...records.filter((item) => item.id !== record.id), record]);
+      return { records: await memory.read() };
+    });
+  }
+  async approveMemory(params) {
+    const project = this.project(params.projectId);
+    return this.serialMemory(project.id, async () => {
+      const memory = this.memoryStore(project);
+      const records = await memory.read();
+      const record = records.find((item) => item.id === params.id);
+      if (!record) throw new Error("Unknown memory item.");
+      record.text = await this.maskMemory(record.text);
+      record.approved = true;
+      await memory.save(records);
+      return { records: await memory.read() };
+    });
+  }
+  async removeMemory(params) {
+    const project = this.project(params.projectId);
+    return this.serialMemory(project.id, async () => {
+      const memory = this.memoryStore(project);
+      const records = await memory.read();
+      await memory.save(records.filter((item) => item.id !== params.id));
+      return { records: await memory.read() };
+    });
+  }
+  async setMemoryPolicy(params) {
+    if (typeof params.requireApproval !== "boolean") throw new Error("requireApproval must be true or false.");
+    if (!this.host) throw new Error("Plugin storage is unavailable.");
+    await this.host.callHost("storage.set", { key: MEMORY_POLICY_KEY, value: { requireApproval: params.requireApproval } });
+    this.requireMemoryApproval = params.requireApproval;
+    return { requireApproval: this.requireMemoryApproval };
+  }
+  project(id) {
+    const project = this.store.get().projects.find((item) => item.id === id);
+    if (!project) throw new Error("Choose a registered project. Project memory never writes outside a registered project.");
+    return project;
+  }
+  memoryStore(project) {
+    let memory = this.projectMemories.get(project.id);
+    if (!memory) {
+      memory = new ProjectMemoryStore(project, this.dataDir);
+      this.projectMemories.set(project.id, memory);
+    }
+    return memory;
+  }
+  serialMemory(projectId, run) {
+    const previous = this.memoryWrites.get(projectId) ?? Promise.resolve();
+    const operation = previous.catch(() => void 0).then(run);
+    this.memoryWrites.set(projectId, operation);
+    return operation.finally(() => {
+      if (this.memoryWrites.get(projectId) === operation) this.memoryWrites.delete(projectId);
+    });
+  }
+  async maskMemory(text) {
+    if (!this.host) throw new Error("Secret masking is unavailable; memory was not saved.");
+    const result = await this.host.callHost("redaction.mask", { text });
+    if (!result || typeof result.text !== "string") throw new Error("Secret masking is unavailable; memory was not saved.");
+    return cleanMemoryText(result.text);
+  }
+  async memorySummary(cwd) {
+    if (!this.host) return "";
+    const project = this.store.projectFor(cwd);
+    if (!project) return "";
+    let records;
+    try {
+      records = await this.memoryStore(project).read();
+    } catch {
+      return "";
+    }
+    const approved = records.filter((record) => record.approved).slice(-20);
+    if (!approved.length) return "";
+    const raw = `Approved project memory:
+${approved.map((record) => `- ${record.text} \u2014 ${record.author}, ${new Date(record.createdAt).toISOString().slice(0, 10)}`).join("\n")}`;
+    let masked;
+    try {
+      const result = await this.host.callHost("redaction.mask", { text: raw });
+      if (!result || typeof result.text !== "string") return "";
+      masked = result.text;
+    } catch {
+      return "";
+    }
+    return truncateUtf8(masked, 4096);
+  }
+  async remember(input, caller) {
+    const cwd = caller?.projectRoot ?? caller?.cwd ?? caller?.workingDirectory;
+    const project = cwd ? this.store.projectFor(cwd) : void 0;
+    if (!project) return { content: "No registered project contains this card; project memory was not changed.", isError: true };
+    return this.serialMemory(project.id, async () => {
+      const memory = this.memoryStore(project);
+      const records = await memory.read();
+      if (records.length >= 200) return { content: "This project has 200 memory entries; remove an old one in Context settings first.", isError: true };
+      const text = await this.maskMemory(cleanMemoryText(input.text));
+      const record = { id: randomUUID3(), text, author: `${(caller?.provider ?? "agent").slice(0, 40)} agent`, createdAt: Date.now(), approved: !this.requireMemoryApproval };
+      await memory.save([...records, record]);
+      return { content: record.approved ? "Saved as approved project memory." : "Saved as pending project memory; a person must approve it in Context settings before agents receive it." };
+    });
+  }
+  async recall(input, caller) {
+    const cwd = caller?.projectRoot ?? caller?.cwd ?? caller?.workingDirectory;
+    const project = cwd ? this.store.projectFor(cwd) : void 0;
+    if (!project) return { content: "No registered project contains this card; no project memory is available.", isError: true };
+    const query = typeof input.query === "string" ? input.query.trim().slice(0, 200).toLocaleLowerCase() : "";
+    const records = (await this.memoryStore(project).read()).filter((record) => record.approved);
+    const matches = records.filter((record) => !query || record.text.toLocaleLowerCase().includes(query)).slice(-8);
+    return { content: matches.length ? matches.map((record) => ({ text: record.text, author: record.author, date: new Date(record.createdAt).toISOString(), approved: true })) : "No approved project memory matches that query." };
+  }
+  async memoryTool(name, input, caller) {
+    try {
+      return name === "remember" ? await this.remember(input, caller) : await this.recall(input, caller);
+    } catch (error) {
+      return { content: errorText(error), isError: true };
+    }
+  }
+  async tool(name, input, caller) {
+    if (name === "remember" || name === "recall") return this.memoryTool(name, input, caller);
     if (name !== "rules_for") return { content: `Unknown tool ${name.slice(0, 40)}.`, isError: true };
     const text = (value, max) => typeof value === "string" && value.trim() ? value.trim().slice(0, max) : void 0;
     const folder = text(input.folder, 4096) ?? caller?.cwd;
     if (!folder || !folder.startsWith("/")) return { content: "Give `folder` as a full path (or call from a card that has a folder).", isError: true };
     const provider = text(input.provider, 20) ?? "claude";
-    if (!isDeliveryCli(provider)) return { content: "Rules reach claude, codex and grok at launch; give one of them as `provider`, or leave it out.", isError: true };
+    if (!isDeliveryCli(provider)) return { content: "Rules reach claude, codex, grok, qwen and pi at launch; give one of them as `provider`, or leave it out.", isError: true };
     const state = this.store.get();
     const project = this.store.projectFor(folder);
     const taskName = text(input.task, 160);
@@ -1159,7 +1493,7 @@ var ContextService = class {
         text: result.text,
         notes: result.diagnostics.map((d) => `${d.sourcePath}: ${d.message}`),
         launchOptions: { [this.pluginId]: { send: true, task: taskId ?? NONE, category: category ?? "all", current: "" } },
-        howTo: `Rules apply in this order: the launch's own instruction, task, project, organization, user, defaults. To give a subagent these rules at launch, pass launchOptions to spawn_agent unchanged (provider claude, codex or grok; ${provider} gets them as ${DELIVERY[provider].how}). They reach an agent on this computer or in a worktree; on a server or in a container the agent starts without them, so put the text in the prompt instead.`
+        howTo: `Rules apply in this order: the launch's own instruction, task, project, organization, user, defaults. To give a subagent these rules at launch, pass launchOptions to spawn_agent unchanged (provider claude, codex, grok, qwen or pi; ${provider} gets them as ${DELIVERY[provider].how}). They reach an agent on this computer or in a worktree; on a server or in a container the agent starts without them, so put the text in the prompt instead.`
       } };
     } catch (error) {
       return { content: errorText(error), isError: true };
@@ -1169,13 +1503,15 @@ var ContextService = class {
 
 // src/service/main.ts
 var resolveReady;
-var ready = new Promise((resolve) => {
-  resolveReady = resolve;
+var ready = new Promise((resolve2) => {
+  resolveReady = resolve2;
 });
 serve({
-  onInitialize: (params, host) => {
+  onInitialize: async (params, host) => {
     const dataDir = typeof params.dataDir === "string" ? params.dataDir : process.cwd();
-    resolveReady(new ContextService({ host, dataDir, ...typeof params.pluginId === "string" ? { pluginId: params.pluginId } : {} }));
+    const service = new ContextService({ host, dataDir, ...typeof params.pluginId === "string" ? { pluginId: params.pluginId } : {} });
+    await service.loadMemoryPolicy();
+    resolveReady(service);
   },
   methods: {
     // Host-only requests.
@@ -1191,6 +1527,11 @@ serve({
     saveImports: async (params) => (await ready).saveImports(params),
     saveTask: async (params) => (await ready).saveTask(params),
     saveRule: async (params) => (await ready).saveRule(params),
-    remove: async (params) => (await ready).remove(params)
+    remove: async (params) => (await ready).remove(params),
+    memoryState: async (params) => (await ready).memoryState(params.projectId),
+    saveMemory: async (params) => (await ready).saveMemory(params),
+    approveMemory: async (params) => (await ready).approveMemory(params),
+    removeMemory: async (params) => (await ready).removeMemory(params),
+    setMemoryPolicy: async (params) => (await ready).setMemoryPolicy(params)
   }
 });

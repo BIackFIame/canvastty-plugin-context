@@ -10,6 +10,8 @@ interface PluginHost {
 interface Candidate { path: string; kind: ImportKind; selected: boolean }
 interface Preview { text: string; omitted: number; size: number; budget: number; included: Array<{ key: string }>; diagnostics: ImportDiagnostic[] }
 interface Draft { id?: string; scope: Exclude<Scope, 'current'>; taskId?: string; category: Category; key: string; valueText: string; json: boolean; enabled: boolean }
+interface MemoryEntry { id: string; text: string; author: string; createdAt: number; approved: boolean }
+interface MemoryState { project: { id: string; label: string; root: string }; records: MemoryEntry[]; requireApproval: boolean }
 
 const host = (window as unknown as { CanvasTTYPlugin: PluginHost }).CanvasTTYPlugin;
 const SERVICE = 'context';
@@ -18,7 +20,7 @@ const GLOBAL = '';
 const STRINGS = {
   en: {
     title: 'Project rules',
-    lead: 'Rules agents get when you launch them with "Send rules" (launcher → Advanced → Use CanvasTTY Context). Priority: the launch\'s own instruction → task → project → organization → user → defaults; a more specific rule with the same key wins. Claude Code gets them as an appended system prompt file, Codex as developer instructions, Grok as --rules.',
+    lead: 'Rules agents get when you launch them with "Send rules" (launcher → Advanced → Use CanvasTTY Context). Priority: the launch\'s own instruction → task → project → organization → user → defaults; a more specific rule with the same key wins. Claude Code gets them as an appended system prompt file; Codex as developer instructions; Grok as --rules; Qwen Code and Pi as per-run --append-system-prompt text.',
     projects: 'Projects', everyone: 'Everyone (user and default rules)', addProject: 'Add project', folder: 'Folder (full path)', name: 'Name', organization: 'Organization (optional id)',
     remove: 'Remove', open: 'Open', rulesFor: (name: string) => `Rules · ${name}`, search: 'Search', allCategories: 'All categories', none: 'No rules here yet.',
     scope: 'Scope', task: 'Task', category: 'Category', key: 'Key (optional, e.g. reply.language)', value: 'Rule', json: 'Value is JSON', enabled: 'On',
@@ -29,11 +31,14 @@ const STRINGS = {
     findFiles: 'Find project files', saveImports: 'Save selection', noFiles: 'No convention files found in this folder.',
     previewTitle: 'What an agent gets', preview: 'Show', previewEmpty: 'Nothing: no rule applies here.', previewSize: (size: number, budget: number, omitted: number) => `${size} of ${budget}${omitted ? `; ${omitted} rule(s) left out for space` : ''}`,
     saved: 'Saved.', notSaved: 'Not saved: ', removed: 'Removed.', tooManyImports: (max: number) => `At most ${max} project files can be imported.`,
+    memory: 'Project memory', memoryHelp: 'Approved notes are added to launch instructions in a summary of at most 4 KiB. Memory is kept privately in CanvasTTY plugin data outside the project; existing project-file notes are imported as pending proposals and need approval again.',
+    remember: 'Remember a durable fact', memoryPlaceholder: 'A project convention, decision, or fact that will matter in future tasks', saveMemory: 'Save approved memory', approveMemory: 'Approve', pendingMemory: 'Pending approval', approvedMemory: 'Approved',
+    requireApproval: 'Agent memories need approval before use', noMemory: 'No memory entries yet.', memoryHuman: 'Person',
     scopes: { defaults: 'Defaults', user: 'You (all projects)', organization: 'Organization', project: 'This project', task: 'Task' } as Record<string, string>
   },
   ru: {
     title: 'Правила проектов',
-    lead: 'Правила, которые агенты получают при запуске с «Send rules» (окно запуска → Дополнительно → Use CanvasTTY Context). Приоритет: инструкция самого запуска → задача → проект → организация → пользователь → значения по умолчанию; более конкретное правило с тем же ключом сильнее. Claude Code получает их файлом, добавленным к системному промпту, Codex — как developer instructions, Grok — через --rules.',
+    lead: 'Правила, которые агенты получают при запуске с «Send rules» (окно запуска → Дополнительно → Use CanvasTTY Context). Приоритет: инструкция самого запуска → задача → проект → организация → пользователь → значения по умолчанию; более конкретное правило с тем же ключом сильнее. Claude Code получает их файлом, добавленным к системному промпту; Codex — как developer instructions; Grok — через --rules; Qwen Code и Pi — как текст --append-system-prompt для одного запуска.',
     projects: 'Проекты', everyone: 'Для всех (правила пользователя и по умолчанию)', addProject: 'Добавить проект', folder: 'Папка (полный путь)', name: 'Название', organization: 'Организация (id, необязательно)',
     remove: 'Удалить', open: 'Открыть', rulesFor: (name: string) => `Правила · ${name}`, search: 'Поиск', allCategories: 'Все категории', none: 'Здесь пока нет правил.',
     scope: 'Область', task: 'Задача', category: 'Категория', key: 'Ключ (необязательно, напр. reply.language)', value: 'Правило', json: 'Значение — JSON', enabled: 'Вкл.',
@@ -44,6 +49,9 @@ const STRINGS = {
     findFiles: 'Найти файлы проекта', saveImports: 'Сохранить выбор', noFiles: 'В этой папке нет файлов с соглашениями.',
     previewTitle: 'Что получит агент', preview: 'Показать', previewEmpty: 'Ничего: здесь не действует ни одно правило.', previewSize: (size: number, budget: number, omitted: number) => `${size} из ${budget}${omitted ? `; не поместилось правил: ${omitted}` : ''}`,
     saved: 'Сохранено.', notSaved: 'Не сохранено: ', removed: 'Удалено.', tooManyImports: (max: number) => `Импортировать можно не больше ${max} файлов проекта.`,
+    memory: 'Память проекта', memoryHelp: 'Одобренные заметки добавляются к инструкциям запуска в кратком обзоре размером до 4 КиБ. Память хранится отдельно в закрытых данных плагина CanvasTTY; прежние заметки из файла проекта импортируются как ожидающие одобрения и требуют повторного одобрения.',
+    remember: 'Запомнить важный факт', memoryPlaceholder: 'Соглашение, решение или факт проекта для будущих задач', saveMemory: 'Сохранить одобренное', approveMemory: 'Одобрить', pendingMemory: 'Ожидает одобрения', approvedMemory: 'Одобрено',
+    requireApproval: 'Память агентов требует одобрения', noMemory: 'Пока нет записей.', memoryHuman: 'Вы',
     scopes: { defaults: 'По умолчанию', user: 'Вы (все проекты)', organization: 'Организация', project: 'Этот проект', task: 'Задача' } as Record<string, string>
   }
 };
@@ -65,6 +73,7 @@ let importError = '';
 let candidates: Candidate[] | null = null;
 /** The project the shown candidates were found in (saving them goes there, whatever is selected by then). */
 let candidatesFor = '';
+let memoryData: MemoryState | null = null;
 /** Bumped whenever another project is selected: an answer for the one before is dropped. */
 let view = 0;
 let preview: Preview | null = null;
@@ -106,7 +115,17 @@ async function load(): Promise<void> {
   data = await request('state') as typeof data;
   if (selected && !project()) { selected = GLOBAL; view++; candidates = null; preview = null; }
   await loadImported();
+  await loadMemory();
   render();
+}
+async function loadMemory(): Promise<void> {
+  memoryData = null;
+  if (!selected) return;
+  const asked = { projectId: selected, view };
+  try {
+    const answer = await request('memoryState', { projectId: asked.projectId }) as MemoryState;
+    if (asked.view === view && asked.projectId === selected) memoryData = answer;
+  } catch (error) { say(errorText(error)); }
 }
 async function loadImported(): Promise<void> {
   importedRules = []; importNotes = []; importError = '';
@@ -121,7 +140,12 @@ async function loadImported(): Promise<void> {
 /** Shows another project (or everyone's rules) and forgets what was on screen for the one before. */
 function choose(id: string): void {
   selected = id; view++; draft = null; candidates = null; preview = null;
-  void loadImported().then(render);
+  void load();
+}
+
+async function changeMemory(method: string, params: Record<string, unknown>): Promise<void> {
+  try { await request(method, params); say(t.saved); await load(); }
+  catch (error) { say(`${t.notSaved}${errorText(error)}`); }
 }
 
 /** Runs a store change with the revision the page shows; a stale page reloads instead of overwriting. The new state, or null. */
@@ -304,8 +328,34 @@ function importSection(): HTMLElement {
   return box;
 }
 
+function memorySection(p: Project): HTMLElement {
+  const state = memoryData?.project.id === p.id ? memoryData : null;
+  const box = el('section', { className: 'memory' }, el('h3', { textContent: t.memory }), el('p', { className: 'muted', textContent: t.memoryHelp }));
+  if (!state) { box.append(el('p', { className: 'muted', textContent: t.noMemory })); return box; }
+  const policy = el('input', { type: 'checkbox', checked: state.requireApproval, name: 'memory-approval' });
+  policy.addEventListener('change', () => void changeMemory('setMemoryPolicy', { requireApproval: policy.checked }));
+  box.append(el('label', { className: 'check' }, policy, ` ${t.requireApproval}`));
+  const addText = el('textarea', { name: 'new-memory', rows: 3, placeholder: t.memoryPlaceholder });
+  box.append(field(t.remember, addText), button(t.saveMemory, 'save-memory', () => {
+    if (addText.value.trim()) void changeMemory('saveMemory', { projectId: p.id, text: addText.value });
+  }));
+  const entries = el('ul', { className: 'memory-entries' });
+  if (!state.records.length) entries.append(el('li', { className: 'muted', textContent: t.noMemory }));
+  for (const record of state.records) {
+    const textarea = el('textarea', { name: `memory-${record.id}`, rows: 2, value: record.text });
+    const metadata = `${record.author} · ${new Date(record.createdAt).toLocaleDateString(locale)} · ${record.approved ? t.approvedMemory : t.pendingMemory}`;
+    const controls: Node[] = [el('span', { className: 'muted', textContent: metadata }),
+      button(t.saveMemory, `save-memory-${record.id}`, () => void changeMemory('saveMemory', { projectId: p.id, id: record.id, text: textarea.value }))];
+    if (!record.approved) controls.push(button(t.approveMemory, `approve-memory-${record.id}`, () => void changeMemory('approveMemory', { projectId: p.id, id: record.id })));
+    controls.push(button(t.remove, `remove-memory-${record.id}`, () => void changeMemory('removeMemory', { projectId: p.id, id: record.id })));
+    entries.append(el('li', {}, textarea, el('div', { className: 'row' }, ...controls)));
+  }
+  box.append(entries);
+  return box;
+}
+
 function previewSection(): HTMLElement {
-  const cli = select('preview-cli', [['claude', 'Claude Code'], ['codex', 'Codex'], ['grok', 'Grok']], previewCli, value => { previewCli = value; });
+  const cli = select('preview-cli', [['claude', 'Claude Code'], ['codex', 'Codex'], ['grok', 'Grok'], ['qwen', 'Qwen Code'], ['pi', 'Pi']], previewCli, value => { previewCli = value; });
   const box = el('section', {}, el('h3', { textContent: t.previewTitle }), el('div', { className: 'row' }, cli, button(t.preview, 'preview', () => {
     const asked = view;
     request('preview', { provider: previewCli, ...(selected ? { projectId: selected } : {}) }).then(answer => { if (asked !== view) return; preview = answer as Preview; render(); }, error => say(errorText(error)));
@@ -339,7 +389,7 @@ function render(): void {
     projectsSection(),
     el('section', {}, el('h2', { textContent: t.rulesFor(p?.label ?? t.everyone) }), el('div', { className: 'row' }, searchInput, categories), slot),
     ruleForm(),
-    ...(p ? [tasksSection(), importSection()] : []),
+    ...(p ? [tasksSection(), importSection(), memorySection(p)] : []),
     previewSection()
   );
 }

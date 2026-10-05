@@ -11,7 +11,7 @@
   var STRINGS = {
     en: {
       title: "Project rules",
-      lead: `Rules agents get when you launch them with "Send rules" (launcher \u2192 Advanced \u2192 Use CanvasTTY Context). Priority: the launch's own instruction \u2192 task \u2192 project \u2192 organization \u2192 user \u2192 defaults; a more specific rule with the same key wins. Claude Code gets them as an appended system prompt file, Codex as developer instructions, Grok as --rules.`,
+      lead: `Rules agents get when you launch them with "Send rules" (launcher \u2192 Advanced \u2192 Use CanvasTTY Context). Priority: the launch's own instruction \u2192 task \u2192 project \u2192 organization \u2192 user \u2192 defaults; a more specific rule with the same key wins. Claude Code gets them as an appended system prompt file; Codex as developer instructions; Grok as --rules; Qwen Code and Pi as per-run --append-system-prompt text.`,
       projects: "Projects",
       everyone: "Everyone (user and default rules)",
       addProject: "Add project",
@@ -59,11 +59,22 @@
       notSaved: "Not saved: ",
       removed: "Removed.",
       tooManyImports: (max) => `At most ${max} project files can be imported.`,
+      memory: "Project memory",
+      memoryHelp: "Approved notes are added to launch instructions in a summary of at most 4 KiB. Memory is kept privately in CanvasTTY plugin data outside the project; existing project-file notes are imported as pending proposals and need approval again.",
+      remember: "Remember a durable fact",
+      memoryPlaceholder: "A project convention, decision, or fact that will matter in future tasks",
+      saveMemory: "Save approved memory",
+      approveMemory: "Approve",
+      pendingMemory: "Pending approval",
+      approvedMemory: "Approved",
+      requireApproval: "Agent memories need approval before use",
+      noMemory: "No memory entries yet.",
+      memoryHuman: "Person",
       scopes: { defaults: "Defaults", user: "You (all projects)", organization: "Organization", project: "This project", task: "Task" }
     },
     ru: {
       title: "\u041F\u0440\u0430\u0432\u0438\u043B\u0430 \u043F\u0440\u043E\u0435\u043A\u0442\u043E\u0432",
-      lead: "\u041F\u0440\u0430\u0432\u0438\u043B\u0430, \u043A\u043E\u0442\u043E\u0440\u044B\u0435 \u0430\u0433\u0435\u043D\u0442\u044B \u043F\u043E\u043B\u0443\u0447\u0430\u044E\u0442 \u043F\u0440\u0438 \u0437\u0430\u043F\u0443\u0441\u043A\u0435 \u0441 \xABSend rules\xBB (\u043E\u043A\u043D\u043E \u0437\u0430\u043F\u0443\u0441\u043A\u0430 \u2192 \u0414\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u0435\u043B\u044C\u043D\u043E \u2192 Use CanvasTTY Context). \u041F\u0440\u0438\u043E\u0440\u0438\u0442\u0435\u0442: \u0438\u043D\u0441\u0442\u0440\u0443\u043A\u0446\u0438\u044F \u0441\u0430\u043C\u043E\u0433\u043E \u0437\u0430\u043F\u0443\u0441\u043A\u0430 \u2192 \u0437\u0430\u0434\u0430\u0447\u0430 \u2192 \u043F\u0440\u043E\u0435\u043A\u0442 \u2192 \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0446\u0438\u044F \u2192 \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044C \u2192 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u044F \u043F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E; \u0431\u043E\u043B\u0435\u0435 \u043A\u043E\u043D\u043A\u0440\u0435\u0442\u043D\u043E\u0435 \u043F\u0440\u0430\u0432\u0438\u043B\u043E \u0441 \u0442\u0435\u043C \u0436\u0435 \u043A\u043B\u044E\u0447\u043E\u043C \u0441\u0438\u043B\u044C\u043D\u0435\u0435. Claude Code \u043F\u043E\u043B\u0443\u0447\u0430\u0435\u0442 \u0438\u0445 \u0444\u0430\u0439\u043B\u043E\u043C, \u0434\u043E\u0431\u0430\u0432\u043B\u0435\u043D\u043D\u044B\u043C \u043A \u0441\u0438\u0441\u0442\u0435\u043C\u043D\u043E\u043C\u0443 \u043F\u0440\u043E\u043C\u043F\u0442\u0443, Codex \u2014 \u043A\u0430\u043A developer instructions, Grok \u2014 \u0447\u0435\u0440\u0435\u0437 --rules.",
+      lead: "\u041F\u0440\u0430\u0432\u0438\u043B\u0430, \u043A\u043E\u0442\u043E\u0440\u044B\u0435 \u0430\u0433\u0435\u043D\u0442\u044B \u043F\u043E\u043B\u0443\u0447\u0430\u044E\u0442 \u043F\u0440\u0438 \u0437\u0430\u043F\u0443\u0441\u043A\u0435 \u0441 \xABSend rules\xBB (\u043E\u043A\u043D\u043E \u0437\u0430\u043F\u0443\u0441\u043A\u0430 \u2192 \u0414\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u0435\u043B\u044C\u043D\u043E \u2192 Use CanvasTTY Context). \u041F\u0440\u0438\u043E\u0440\u0438\u0442\u0435\u0442: \u0438\u043D\u0441\u0442\u0440\u0443\u043A\u0446\u0438\u044F \u0441\u0430\u043C\u043E\u0433\u043E \u0437\u0430\u043F\u0443\u0441\u043A\u0430 \u2192 \u0437\u0430\u0434\u0430\u0447\u0430 \u2192 \u043F\u0440\u043E\u0435\u043A\u0442 \u2192 \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0446\u0438\u044F \u2192 \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044C \u2192 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u044F \u043F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E; \u0431\u043E\u043B\u0435\u0435 \u043A\u043E\u043D\u043A\u0440\u0435\u0442\u043D\u043E\u0435 \u043F\u0440\u0430\u0432\u0438\u043B\u043E \u0441 \u0442\u0435\u043C \u0436\u0435 \u043A\u043B\u044E\u0447\u043E\u043C \u0441\u0438\u043B\u044C\u043D\u0435\u0435. Claude Code \u043F\u043E\u043B\u0443\u0447\u0430\u0435\u0442 \u0438\u0445 \u0444\u0430\u0439\u043B\u043E\u043C, \u0434\u043E\u0431\u0430\u0432\u043B\u0435\u043D\u043D\u044B\u043C \u043A \u0441\u0438\u0441\u0442\u0435\u043C\u043D\u043E\u043C\u0443 \u043F\u0440\u043E\u043C\u043F\u0442\u0443; Codex \u2014 \u043A\u0430\u043A developer instructions; Grok \u2014 \u0447\u0435\u0440\u0435\u0437 --rules; Qwen Code \u0438 Pi \u2014 \u043A\u0430\u043A \u0442\u0435\u043A\u0441\u0442 --append-system-prompt \u0434\u043B\u044F \u043E\u0434\u043D\u043E\u0433\u043E \u0437\u0430\u043F\u0443\u0441\u043A\u0430.",
       projects: "\u041F\u0440\u043E\u0435\u043A\u0442\u044B",
       everyone: "\u0414\u043B\u044F \u0432\u0441\u0435\u0445 (\u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044F \u0438 \u043F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E)",
       addProject: "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u043F\u0440\u043E\u0435\u043A\u0442",
@@ -111,6 +122,17 @@
       notSaved: "\u041D\u0435 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u043E: ",
       removed: "\u0423\u0434\u0430\u043B\u0435\u043D\u043E.",
       tooManyImports: (max) => `\u0418\u043C\u043F\u043E\u0440\u0442\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u043C\u043E\u0436\u043D\u043E \u043D\u0435 \u0431\u043E\u043B\u044C\u0448\u0435 ${max} \u0444\u0430\u0439\u043B\u043E\u0432 \u043F\u0440\u043E\u0435\u043A\u0442\u0430.`,
+      memory: "\u041F\u0430\u043C\u044F\u0442\u044C \u043F\u0440\u043E\u0435\u043A\u0442\u0430",
+      memoryHelp: "\u041E\u0434\u043E\u0431\u0440\u0435\u043D\u043D\u044B\u0435 \u0437\u0430\u043C\u0435\u0442\u043A\u0438 \u0434\u043E\u0431\u0430\u0432\u043B\u044F\u044E\u0442\u0441\u044F \u043A \u0438\u043D\u0441\u0442\u0440\u0443\u043A\u0446\u0438\u044F\u043C \u0437\u0430\u043F\u0443\u0441\u043A\u0430 \u0432 \u043A\u0440\u0430\u0442\u043A\u043E\u043C \u043E\u0431\u0437\u043E\u0440\u0435 \u0440\u0430\u0437\u043C\u0435\u0440\u043E\u043C \u0434\u043E 4 \u041A\u0438\u0411. \u041F\u0430\u043C\u044F\u0442\u044C \u0445\u0440\u0430\u043D\u0438\u0442\u0441\u044F \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u043E \u0432 \u0437\u0430\u043A\u0440\u044B\u0442\u044B\u0445 \u0434\u0430\u043D\u043D\u044B\u0445 \u043F\u043B\u0430\u0433\u0438\u043D\u0430 CanvasTTY; \u043F\u0440\u0435\u0436\u043D\u0438\u0435 \u0437\u0430\u043C\u0435\u0442\u043A\u0438 \u0438\u0437 \u0444\u0430\u0439\u043B\u0430 \u043F\u0440\u043E\u0435\u043A\u0442\u0430 \u0438\u043C\u043F\u043E\u0440\u0442\u0438\u0440\u0443\u044E\u0442\u0441\u044F \u043A\u0430\u043A \u043E\u0436\u0438\u0434\u0430\u044E\u0449\u0438\u0435 \u043E\u0434\u043E\u0431\u0440\u0435\u043D\u0438\u044F \u0438 \u0442\u0440\u0435\u0431\u0443\u044E\u0442 \u043F\u043E\u0432\u0442\u043E\u0440\u043D\u043E\u0433\u043E \u043E\u0434\u043E\u0431\u0440\u0435\u043D\u0438\u044F.",
+      remember: "\u0417\u0430\u043F\u043E\u043C\u043D\u0438\u0442\u044C \u0432\u0430\u0436\u043D\u044B\u0439 \u0444\u0430\u043A\u0442",
+      memoryPlaceholder: "\u0421\u043E\u0433\u043B\u0430\u0448\u0435\u043D\u0438\u0435, \u0440\u0435\u0448\u0435\u043D\u0438\u0435 \u0438\u043B\u0438 \u0444\u0430\u043A\u0442 \u043F\u0440\u043E\u0435\u043A\u0442\u0430 \u0434\u043B\u044F \u0431\u0443\u0434\u0443\u0449\u0438\u0445 \u0437\u0430\u0434\u0430\u0447",
+      saveMemory: "\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u043E\u0434\u043E\u0431\u0440\u0435\u043D\u043D\u043E\u0435",
+      approveMemory: "\u041E\u0434\u043E\u0431\u0440\u0438\u0442\u044C",
+      pendingMemory: "\u041E\u0436\u0438\u0434\u0430\u0435\u0442 \u043E\u0434\u043E\u0431\u0440\u0435\u043D\u0438\u044F",
+      approvedMemory: "\u041E\u0434\u043E\u0431\u0440\u0435\u043D\u043E",
+      requireApproval: "\u041F\u0430\u043C\u044F\u0442\u044C \u0430\u0433\u0435\u043D\u0442\u043E\u0432 \u0442\u0440\u0435\u0431\u0443\u0435\u0442 \u043E\u0434\u043E\u0431\u0440\u0435\u043D\u0438\u044F",
+      noMemory: "\u041F\u043E\u043A\u0430 \u043D\u0435\u0442 \u0437\u0430\u043F\u0438\u0441\u0435\u0439.",
+      memoryHuman: "\u0412\u044B",
       scopes: { defaults: "\u041F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E", user: "\u0412\u044B (\u0432\u0441\u0435 \u043F\u0440\u043E\u0435\u043A\u0442\u044B)", organization: "\u041E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0446\u0438\u044F", project: "\u042D\u0442\u043E\u0442 \u043F\u0440\u043E\u0435\u043A\u0442", task: "\u0417\u0430\u0434\u0430\u0447\u0430" }
     }
   };
@@ -139,6 +161,7 @@
   var importError = "";
   var candidates = null;
   var candidatesFor = "";
+  var memoryData = null;
   var view = 0;
   var preview = null;
   var previewCli = "claude";
@@ -182,7 +205,19 @@
       preview = null;
     }
     await loadImported();
+    await loadMemory();
     render();
+  }
+  async function loadMemory() {
+    memoryData = null;
+    if (!selected) return;
+    const asked = { projectId: selected, view };
+    try {
+      const answer = await request("memoryState", { projectId: asked.projectId });
+      if (asked.view === view && asked.projectId === selected) memoryData = answer;
+    } catch (error) {
+      say(errorText(error));
+    }
   }
   async function loadImported() {
     importedRules = [];
@@ -204,7 +239,16 @@
     draft = null;
     candidates = null;
     preview = null;
-    void loadImported().then(render);
+    void load();
+  }
+  async function changeMemory(method, params) {
+    try {
+      await request(method, params);
+      say(t.saved);
+      await load();
+    } catch (error) {
+      say(`${t.notSaved}${errorText(error)}`);
+    }
   }
   async function change(method, params, done = t.saved) {
     if (!data) return null;
@@ -445,8 +489,38 @@
     for (const note of importNotes) box.append(el("p", { className: "muted", textContent: `${note.sourcePath}: ${note.message}` }));
     return box;
   }
+  function memorySection(p) {
+    const state = memoryData?.project.id === p.id ? memoryData : null;
+    const box = el("section", { className: "memory" }, el("h3", { textContent: t.memory }), el("p", { className: "muted", textContent: t.memoryHelp }));
+    if (!state) {
+      box.append(el("p", { className: "muted", textContent: t.noMemory }));
+      return box;
+    }
+    const policy = el("input", { type: "checkbox", checked: state.requireApproval, name: "memory-approval" });
+    policy.addEventListener("change", () => void changeMemory("setMemoryPolicy", { requireApproval: policy.checked }));
+    box.append(el("label", { className: "check" }, policy, ` ${t.requireApproval}`));
+    const addText = el("textarea", { name: "new-memory", rows: 3, placeholder: t.memoryPlaceholder });
+    box.append(field(t.remember, addText), button(t.saveMemory, "save-memory", () => {
+      if (addText.value.trim()) void changeMemory("saveMemory", { projectId: p.id, text: addText.value });
+    }));
+    const entries = el("ul", { className: "memory-entries" });
+    if (!state.records.length) entries.append(el("li", { className: "muted", textContent: t.noMemory }));
+    for (const record of state.records) {
+      const textarea = el("textarea", { name: `memory-${record.id}`, rows: 2, value: record.text });
+      const metadata = `${record.author} \xB7 ${new Date(record.createdAt).toLocaleDateString(locale)} \xB7 ${record.approved ? t.approvedMemory : t.pendingMemory}`;
+      const controls = [
+        el("span", { className: "muted", textContent: metadata }),
+        button(t.saveMemory, `save-memory-${record.id}`, () => void changeMemory("saveMemory", { projectId: p.id, id: record.id, text: textarea.value }))
+      ];
+      if (!record.approved) controls.push(button(t.approveMemory, `approve-memory-${record.id}`, () => void changeMemory("approveMemory", { projectId: p.id, id: record.id })));
+      controls.push(button(t.remove, `remove-memory-${record.id}`, () => void changeMemory("removeMemory", { projectId: p.id, id: record.id })));
+      entries.append(el("li", {}, textarea, el("div", { className: "row" }, ...controls)));
+    }
+    box.append(entries);
+    return box;
+  }
   function previewSection() {
-    const cli = select("preview-cli", [["claude", "Claude Code"], ["codex", "Codex"], ["grok", "Grok"]], previewCli, (value) => {
+    const cli = select("preview-cli", [["claude", "Claude Code"], ["codex", "Codex"], ["grok", "Grok"], ["qwen", "Qwen Code"], ["pi", "Pi"]], previewCli, (value) => {
       previewCli = value;
     });
     const box = el("section", {}, el("h3", { textContent: t.previewTitle }), el("div", { className: "row" }, cli, button(t.preview, "preview", () => {
@@ -491,7 +565,7 @@
       projectsSection(),
       el("section", {}, el("h2", { textContent: t.rulesFor(p?.label ?? t.everyone) }), el("div", { className: "row" }, searchInput, categories), slot),
       ruleForm(),
-      ...p ? [tasksSection(), importSection()] : [],
+      ...p ? [tasksSection(), importSection(), memorySection(p)] : [],
       previewSection()
     );
   }

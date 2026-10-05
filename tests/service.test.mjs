@@ -30,7 +30,7 @@ async function setup(t) {
 
 test('Claude Code gets the rules as a launch file appended to its system prompt; off, unchosen or empty gives nothing', async t => {
   const { service, ctx, root } = await setup(t);
-  const answer = service.prepare(ctx({ send: true, task: 'none', category: 'all', current: '' }));
+  const answer = await service.prepare(ctx({ send: true, task: 'none', category: 'all', current: '' }));
   assert.deepEqual(answer.args, ['--append-system-prompt-file', '{launchFiles}/rules.md']);
   assert.equal(answer.files[0].relPath, 'rules.md');
   const text = answer.files[0].content;
@@ -39,24 +39,25 @@ test('Claude Code gets the rules as a launch file appended to its system prompt;
   assert.match(text, /Run npm test/);
   assert.ok(text.indexOf('Never print keys') < text.indexOf('MARKER-7'), 'security first');
   assert.doesNotMatch(text, /AGENTS\.md/);
-  assert.equal(service.prepare(ctx({ send: false })), null);
-  assert.equal(service.prepare(ctx({}, { chosen: false })), null);
-  assert.equal(service.prepare(ctx({ send: true }, { cwd: root })).files[0].content.includes('MARKER-7'), false, 'another folder: only the user rule');
-  assert.match(service.prepare(ctx({ send: true }, { provider: 'opencode' })).refuse.reason, /cannot receive rules/);
+  assert.equal(await service.prepare(ctx({ send: false })), null);
+  assert.equal(await service.prepare(ctx({}, { chosen: false })), null);
+  const otherFolder = await service.prepare(ctx({ send: true }, { cwd: root }));
+  assert.equal(otherFolder.files[0].content.includes('MARKER-7'), false, 'another folder: only the user rule');
+  assert.equal(await service.prepare(ctx({ send: true }, { provider: 'opencode' })), null, 'unsupported CLI starts without a launch contribution');
 });
 
-test('rules reach an agent on this computer or in a worktree; a server or container card starts without them and says so on the card', async t => {
+test('rules reach supported agents on this computer or in a worktree; unsupported CLIs start with an explicit task fallback', async t => {
   const { root, ctx } = await setup(t);
   const badges = [];
   const service = new ContextService({ dataDir: join(root, 'data'), host: { callHost: async (method, params) => { badges.push({ method, ...params }); return null; } } });
-  const worktree = service.prepare(ctx({ send: true }, { environment: { pluginId: 'canvastty-environments', kind: 'worktree' } }));
+  const worktree = await service.prepare(ctx({ send: true }, { environment: { pluginId: 'canvastty-environments', kind: 'worktree' } }));
   assert.equal(worktree.files[0].relPath, 'rules.md');
   assert.equal(badges.length, 0);
   const places = [['ssh-host', 'server'], ['container', 'container'], ['remote-container', 'container']];
-  for (const provider of ['claude', 'codex', 'grok']) {
+  for (const provider of ['claude', 'codex', 'grok', 'qwen', 'pi']) {
     for (const [kind, where] of places) {
       badges.length = 0;
-      assert.equal(service.prepare(ctx({ send: true }, { provider, sessionId: `s-${kind}`, environment: { pluginId: 'canvastty-environments', kind } })), null, `${provider} ${kind}: launched, not refused`);
+      assert.equal(await service.prepare(ctx({ send: true }, { provider, sessionId: `s-${kind}`, environment: { pluginId: 'canvastty-environments', kind } })), null, `${provider} ${kind}: launched, not refused`);
       assert.equal(badges.length, 1);
       assert.equal(badges[0].method, 'cards.setBadge');
       assert.equal(badges[0].sessionId, `s-${kind}`);
@@ -65,23 +66,23 @@ test('rules reach an agent on this computer or in a worktree; a server or contai
       assert.match(badges[0].badge.tooltip, new RegExp(`^Project rules are not delivered on this ${where}`, 'u'));
     }
   }
-  assert.equal(service.prepare(ctx({ send: true }, { environment: { pluginId: 'other-plugin', kind: 'worktree' } })), null, 'another plugin\'s environment: not known to pass the launch on');
+  assert.equal(await service.prepare(ctx({ send: true }, { environment: { pluginId: 'other-plugin', kind: 'worktree' } })), null, 'another plugin\'s environment: not known to pass the launch on');
   badges.length = 0;
-  assert.equal(service.prepare(ctx({ send: false }, { environment: { pluginId: 'canvastty-environments', kind: 'ssh-host' } })), null);
+  assert.equal(await service.prepare(ctx({ send: false }, { environment: { pluginId: 'canvastty-environments', kind: 'ssh-host' } })), null);
   assert.equal(badges.length, 0, 'Send rules off: no note');
 });
 
 test('a saved task and the launch instruction win over the project; a task of another project refuses', async t => {
   const { service, ctx, taskId, root, project } = await setup(t);
-  const withTask = service.prepare(ctx({ send: true, task: taskId, current: 'Keep it short.' })).files[0].content;
+  const withTask = (await service.prepare(ctx({ send: true, task: taskId, current: 'Keep it short.' }))).files[0].content;
   assert.match(withTask, /Answer in Russian/);
   assert.doesNotMatch(withTask, /Answer in English/);
   assert.ok(withTask.indexOf('Keep it short') < withTask.indexOf('MARKER-7'), 'the launch instruction first');
   mkdirSync(join(root, 'other'));
   let state = await service.store.saveProject({ label: 'Other', root: join(root, 'other') }, service.store.get().revision);
-  assert.match(service.prepare(ctx({ send: true, task: taskId }, { cwd: join(root, 'other') })).refuse.reason, /another project/);
-  assert.match(service.prepare(ctx({ send: true, task: 'gone' })).refuse.reason, /no longer exists/);
-  const category = service.prepare(ctx({ send: true, category: 'design' })).files[0].content;
+  assert.match((await service.prepare(ctx({ send: true, task: taskId }, { cwd: join(root, 'other') }))).refuse.reason, /another project/);
+  assert.match((await service.prepare(ctx({ send: true, task: 'gone' }))).refuse.reason, /no longer exists/);
+  const category = (await service.prepare(ctx({ send: true, category: 'design' }))).files[0].content;
   assert.match(category, /Never print keys/, 'security always');
   assert.doesNotMatch(category, /MARKER-7/);
   assert.ok(project);
@@ -90,15 +91,27 @@ test('a saved task and the launch instruction win over the project; a task of an
 
 test('Codex gets developer_instructions (a TOML string ≤ 1024), Grok one --rules line; too long refuses', async t => {
   const { service, ctx } = await setup(t);
-  const codex = service.prepare(ctx({ send: true }, { provider: 'codex' }));
+  const codex = await service.prepare(ctx({ send: true }, { provider: 'codex' }));
   assert.equal(codex.args[0], '-c');
   assert.match(codex.args[1], /^developer_instructions="CanvasTTY project rules/u);
   assert.ok(codex.args[1].length <= 1024);
   assert.doesNotMatch(codex.args[1], /[\u0000-\u001f\u007f]/u);
   assert.match(JSON.parse(codex.args[1].slice('developer_instructions='.length)), /MARKER-7/);
-  const grok = service.prepare(ctx({ send: true }, { provider: 'grok' }));
+  const grok = await service.prepare(ctx({ send: true }, { provider: 'grok' }));
   assert.equal(grok.args[0], '--rules');
   assert.doesNotMatch(grok.args[1], /\n/u);
+  for (const provider of ['qwen', 'pi']) {
+    const answer = await service.prepare(ctx({ send: true }, { provider }));
+    assert.deepEqual(answer.args.slice(0, 1), ['--append-system-prompt']);
+    assert.ok(answer.args[1].length <= 1024);
+    assert.doesNotMatch(answer.args[1], /[\u0000-\u001f\u007f]/u);
+    assert.deepEqual(answer.env, {});
+    assert.deepEqual(answer.secretEnv, {});
+    assert.deepEqual(answer.files, [], 'per-run delivery changes no user or project CLI files');
+    assert.match(answer.args[1], /MARKER-7/u);
+  }
+  assert.deepEqual(contributionFor('qwen', 'Keep the source').args, ['--append-system-prompt', 'Keep the source']);
+  assert.deepEqual(contributionFor('pi', 'Keep the source').args, ['--append-system-prompt', 'CanvasTTY Context rules and approved memory: Keep the source']);
   assert.throws(() => contributionFor('codex', 'x'.repeat(1100)), /at most 1024/);
   assert.equal(contributionFor('claude', 'Never bypass review').files[0].content, 'Never bypass review');
   // Long project text is cut to what Codex takes; the omitted count says so.
@@ -131,17 +144,17 @@ test('the launcher lists saved tasks with their project; rules_for answers for a
   const { service, project, taskId } = await setup(t);
   assert.deepEqual(service.launchOptions(), { task: [{ value: taskId, label: 'Site · Release' }] });
   const caller = { id: 'o', provider: 'claude', role: 'orchestrator', cwd: join(project, 'sub') };
-  const answer = service.tool('rules_for', { task: 'release' }, caller).content;
+  const answer = (await service.tool('rules_for', { task: 'release' }, caller)).content;
   assert.equal(answer.project.name, 'Site');
   assert.equal(answer.task, 'Release');
   assert.equal(answer.rules[0].category, 'security');
   assert.ok(answer.rules.some(rule => rule.value === 'Answer in Russian.' && rule.scope === 'task'));
   assert.deepEqual(answer.launchOptions, { 'canvastty-context': { send: true, task: taskId, category: 'all', current: '' } });
   assert.match(answer.text, /MARKER-7/);
-  assert.equal(service.tool('rules_for', { task: 'nope' }, caller).isError, true);
-  assert.equal(service.tool('rules_for', { folder: 'relative' }, caller).isError, true);
-  assert.equal(service.tool('rules_for', { provider: 'opencode' }, caller).isError, true);
-  assert.equal(service.tool('other', {}, caller).isError, true);
+  assert.equal((await service.tool('rules_for', { task: 'nope' }, caller)).isError, true);
+  assert.equal((await service.tool('rules_for', { folder: 'relative' }, caller)).isError, true);
+  assert.equal((await service.tool('rules_for', { provider: 'opencode' }, caller)).isError, true);
+  assert.equal((await service.tool('other', {}, caller)).isError, true);
 });
 
 test('the page preview shows what each CLI would get, without origins', async t => {

@@ -25,7 +25,7 @@ test('coreFiles match the package bytes; the service and page are single bundled
   }
   for (const path of ['services/context.mjs', 'settings/context.js']) assert.doesNotMatch(readFileSync(join(root, path), 'utf8'), /^import .* from ["']\.\.?\//mu, `${path} is bundled`);
   assert.equal(manifest.id, 'canvastty-context');
-  assert.deepEqual(manifest.permissions, ['launch:contribute', 'tools:agents', 'cards:decorate']);
+  assert.deepEqual(manifest.permissions, ['storage', 'launch:contribute', 'tools:agents', 'cards:decorate']);
   // rules_for hands orchestrators launchOptions for spawn_agent; they only pick prompt text, so they are delegable.
   assert.equal(manifest.services[0].launch.delegable, true);
 });
@@ -34,7 +34,7 @@ test('the manifest passes CanvasTTY\'s own validator (CANVASTTY_REPO)', { skip: 
   const { validatePluginManifest } = await import(join(process.env.CANVASTTY_REPO, 'src/main/services/PluginManager.ts'));
   const checked = validatePluginManifest(manifest);
   assert.deepEqual(checked.services[0].launch.fields.map(field => field.key), ['send', 'task', 'category', 'current']);
-  assert.deepEqual(checked.services[0].tools.map(tool => tool.name), ['rules_for']);
+  assert.deepEqual(checked.services[0].tools.map(tool => tool.name), ['rules_for', 'remember', 'recall']);
 });
 
 function startService(t, dataDir) {
@@ -113,4 +113,18 @@ test('through CanvasTTY\'s supervisor and launch pipeline: the rules file is wri
   assert.ok(codex.args.some(arg => arg.startsWith('developer_instructions=')));
   await prepared.cleanup();
   await codex.cleanup();
+
+  for (const provider of ['qwen', 'pi']) {
+    const agentOptions = pipeline.normalizeOptions(provider, { [checked.id]: { send: true } });
+    assert.deepEqual(agentOptions, { [checked.id]: { send: true, task: 'none', category: 'all', current: '' } });
+    const launch = await pipeline.prepare({ sessionId: `e2e-${provider}`, provider, profile: 'normal', role: 'agent', cwd: project,
+      restoring: false, resume: false, environment: null, options: agentOptions });
+    assert.equal(launch.ok, true, launch.reason);
+    const flag = launch.args.indexOf('--append-system-prompt');
+    assert.ok(flag >= 0, `${provider} receives the documented per-run append flag through CanvasTTY's core launch pipeline`);
+    assert.ok(launch.args[flag + 1].length <= 1024);
+    assert.match(launch.args[flag + 1], /MARKER-7/u);
+    assert.deepEqual(launch.env, {}, `${provider} delivery changes no CLI environment or shared configuration`);
+    await launch.cleanup();
+  }
 });

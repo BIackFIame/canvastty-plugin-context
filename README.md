@@ -3,7 +3,7 @@
 > **Requires the CanvasTTY core with plugin API v2** (plugin services, launch contributors, session environments, decision hooks, plugin tools and card actions, `launch.delegable` and `cards:decorate`): the upcoming release after 1.7.0. CanvasTTY 1.7.0 and earlier do not have these extension points, so installing it there fails the manifest check.
 
 Project rules for agents in [CanvasTTY](https://github.com/howdeploy/CanvasTTY): the conventions you would otherwise
-repeat in every prompt, kept per project and sent to an agent when you launch it.
+repeat in every prompt, kept per project and sent to Claude Code, Codex, Grok, Qwen Code or Pi when you launch with Send rules.
 
 - **Rules** for you (all projects), defaults, an organization, a project or a saved task, each with a category
   (design, architecture, code style, security, testing, …), a key and a text or JSON value. A more specific rule with
@@ -18,6 +18,11 @@ repeat in every prompt, kept per project and sent to an agent when you launch it
 - **Design tokens and checkable conventions**: starters for colors, typography, spacing, radius and component colors,
   and `validate.*` JSON presets (forbidden colors or color pairs, formatter settings, file names, dependencies) whose
   shape is checked when saved.
+- **Project memory**: agents can suggest durable facts with `remember` and query approved facts with `recall`. The
+  shared, human-readable `.canvastty/memory.json` is confined to a registered project and secret-masked before saving.
+  Agent suggestions wait for approval by default; people can edit, approve or remove each item in Settings, or turn off
+  approval for that project. Records show author and date. Only approved memory is sent at launch, capped at 4 KiB
+  (and within each CLI's smaller argument limit).
 
 ## Sending rules to an agent
 
@@ -31,17 +36,21 @@ Trust the plugin's native code (Settings → Plugins), then in the launcher open
 | Instruction for this launch | One more rule, stronger than all others, for this launch only |
 
 The rules for the card's folder are resolved at every start (restart and restore included), so a changed rule or file
-applies at the next start. How each agent gets them — the flags CanvasTTY's own context layer used:
+applies at the next start. How each supported agent gets them:
 
 | Agent | Delivery | Size |
 |:--|:--|:--|
 | Claude Code | a launch file, `--append-system-prompt-file` (added to its system prompt) | 24 KB |
 | Codex | `-c developer_instructions="…"` (next to `AGENTS.md`) | 1024 characters as one argument |
 | Grok | `--rules "…"` | 1024 characters |
+| Qwen Code | [`--append-system-prompt "…"`](https://github.com/QwenLM/qwen-code-docs/blob/main/website/content/en/users/features/headless.md) for this run | 1024 characters |
+| Pi | [`--append-system-prompt "…"`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/cli.md) for this run | 1024 characters |
 
 Rules that do not fit are left out whole and the preview says how many; a security, dependencies or launch
-instruction that does not fit refuses the launch with the reason instead. Other agents have no launch flag for this and
-are not offered the option.
+instruction that does not fit refuses the launch with the reason instead. Qwen Code and Pi use a per-run append flag;
+Pi text is prefixed so it cannot be mistaken for the flag's optional file-path form. The plugin does not write user CLI
+configuration or permissions. Other agents start with a **Rules not delivered** badge and a `rules_for`/`recall` fallback
+until a safe per-run instruction channel is confirmed.
 
 CanvasTTY refuses plugin arguments that set its own approvals, sandbox or hooks, so the Codex and Grok argument is
 judged by its shape the same way: a rule may say "never bypass review", but rules whose text starts like such a setting
@@ -51,12 +60,12 @@ judged by its shape the same way: a rule may say "never bypass review", but rule
 
 `canvastty-context__rules_for` (orchestrators and subagents) answers which rules apply to a folder (default: the
 caller's), optionally for a saved task or one category: the rules in order, the exact text, and `launchOptions` to pass
-to `spawn_agent` so a Claude Code, Codex or Grok subagent gets them at launch. The launch options are declared
+to `spawn_agent` so a Claude Code, Codex, Grok, Qwen Code or Pi subagent gets them at launch. The launch options are declared
 delegable (`launch.delegable`; CanvasTTY refuses undeclared ones in `spawn_agent`): they only choose which rules are added to the agent's prompt, never a permission.
 
 ## Servers and containers
 
-Rules travel with the launch (a file for Claude Code, an argument for Codex and Grok). On this computer and in a
+Rules travel with the launch (a file for Claude Code and arguments for Codex, Grok, Qwen Code and Pi). On this computer and in a
 CanvasTTY Environments worktree they reach the agent. Servers (ssh) and containers do not pass the launch's files and
 local paths on, so a card there with **Send rules** on starts without the rules and carries the badge *Rules not
 delivered* ("project rules are not delivered on this server/container"); give the agent the text of `rules_for` in its
@@ -65,9 +74,9 @@ passes the launch on. The badge needs the `cards:decorate` permission.
 
 ## Storage
 
-Projects, tasks and rules live in `rules/rules.json` (private file) in the plugin's data folder, apart from any
-settings; every change takes `rules/rules.lock` and is checked against the revision stored in the file, so a second writer on
-the same folder is refused instead of overwritten (a lock left behind is taken over after 30 s). Uninstalling the plugin removes it.
+Projects, tasks, rules and approval policy live in `rules/rules.json` (private file) in the plugin's data folder, apart from any
+settings; each project's `.canvastty/memory.json` remains with that project. Rule changes take `rules/rules.lock` and are checked against the revision stored in the file, so a second writer on
+the same folder is refused instead of overwritten (a lock left behind is taken over after 30 s). Uninstalling removes the plugin's data; project memory stays in the project.
 Between the service and CanvasTTY a frame is at most 1 MiB, a host call fails after 30 s or past 64 in flight, and
 waiting events and logs are capped at 8 MiB.
 

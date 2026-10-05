@@ -3,7 +3,7 @@
 // take the text as one argument, which CanvasTTY caps at 1024 characters without control characters.
 import { bytes } from '../shared/rules.ts';
 
-export const DELIVERY_CLIS = ['claude', 'codex', 'grok'] as const;
+export const DELIVERY_CLIS = ['claude', 'codex', 'grok', 'qwen', 'pi'] as const;
 export type DeliveryCli = typeof DELIVERY_CLIS[number];
 export const isDeliveryCli = (value: unknown): value is DeliveryCli => DELIVERY_CLIS.includes(value as DeliveryCli);
 
@@ -52,7 +52,11 @@ export const DELIVERY: Record<DeliveryCli, { how: string; budget: number; measur
   claude: { how: 'a file appended to the system prompt (--append-system-prompt-file)', budget: 24 * 1024, measure: bytes },
   // Codex developer instructions (-c developer_instructions=…), next to AGENTS.md, not instead of it.
   codex: { how: 'developer instructions (-c developer_instructions=…)', budget: MAX_ARG, measure: text => codexArg(text).length },
-  grok: { how: 'rules appended to the system prompt (--rules)', budget: MAX_ARG, measure: text => oneLine(text).length }
+  grok: { how: 'rules appended to the system prompt (--rules)', budget: MAX_ARG, measure: text => oneLine(text).length },
+  // These official per-run flags append text after the CLI's own/context instructions; no shared config is changed.
+  qwen: { how: 'per-run system prompt addition (--append-system-prompt)', budget: MAX_ARG, measure: text => oneLine(text).length },
+  // Pi interprets an existing-file argument as a path; the prefixed text below cannot be such a path.
+  pi: { how: 'per-run system prompt addition (--append-system-prompt)', budget: MAX_ARG, measure: text => oneLine(`CanvasTTY Context rules and approved memory: ${text}`).length }
 };
 
 /** The launch contribution carrying `text` to `cli`; throws with a person-readable reason when it cannot. */
@@ -61,10 +65,14 @@ export function contributionFor(cli: DeliveryCli, text: string): Contribution {
   if (cli === 'claude') {
     return { ...base, args: ['--append-system-prompt-file', '{launchFiles}/rules.md'], files: [{ relPath: 'rules.md', content: text }] };
   }
-  const arg = cli === 'codex' ? codexArg(text) : oneLine(text);
-  if (arg.length > MAX_ARG) throw new Error(`The rules are ${arg.length} characters as one argument; ${cli === 'codex' ? 'Codex' : 'Grok'} takes at most ${MAX_ARG} at launch.`);
+  // Pi also accepts a file path for this flag. Prefix the content so it is always literal instruction text, never a path.
+  const prompt = cli === 'pi' ? `CanvasTTY Context rules and approved memory: ${text}` : text;
+  const arg = cli === 'codex' ? codexArg(text) : oneLine(prompt);
+  const label = cli === 'codex' ? 'Codex' : cli === 'grok' ? 'Grok' : cli === 'qwen' ? 'Qwen Code' : 'Pi';
+  if (arg.length > MAX_ARG) throw new Error(`The rules are ${arg.length} characters as one argument; ${label} takes at most ${MAX_ARG} at launch.`);
   // `-c` and `--rules` themselves are not CanvasTTY's; the value after them is judged on its own.
   const reason = coreRefusal(arg);
-  if (reason) throw new Error(`The rules as ${cli === 'codex' ? 'Codex' : 'Grok'}'s argument ${reason}; reword the first rule or turn off Send rules.`);
-  return { ...base, args: cli === 'codex' ? ['-c', arg] : ['--rules', arg] };
+  if (reason) throw new Error(`The rules as ${cli === 'codex' ? 'Codex' : cli === 'grok' ? 'Grok' : cli === 'qwen' ? 'Qwen Code' : 'Pi'}'s argument ${reason}; reword the first rule or turn off Send rules.`);
+  const args = cli === 'codex' ? ['-c', arg] : cli === 'grok' ? ['--rules', arg] : ['--append-system-prompt', arg];
+  return { ...base, args };
 }

@@ -3,10 +3,11 @@
   "id": "canvastty-context",
   "name": "CanvasTTY Context",
   "version": "0.1.0",
-  "description": "Project rules for agents: rules for you, an organization, a project or a saved task, imported from AGENTS.md, CLAUDE.md, Cursor rules, README, .editorconfig, Prettier/ESLint and CSS tokens, and sent to Claude Code, Codex or Grok when you launch them with \"Send rules\". Orchestrators ask which rules apply to a folder.",
-  "description.ru": "Правила проектов для агентов: правила для вас, организации, проекта или сохранённой задачи, импорт из AGENTS.md, CLAUDE.md, правил Cursor, README, .editorconfig, Prettier/ESLint и CSS-токенов; Claude Code, Codex или Grok получают их при запуске с «Send rules». Оркестраторы узнают, какие правила действуют для папки.",
+  "description": "Project rules for agents: import project conventions, send them to Claude Code, Codex, Grok, Qwen Code or Pi when you launch with Send rules, and keep secret-masked, human-approved project memory for later tasks. Other CLIs start with an explicit fallback badge. Orchestrators ask which rules apply to a folder.",
+  "description.ru": "Правила агентов: импортируйте соглашения проекта, передавайте их Claude Code, Codex, Grok, Qwen Code или Pi при запуске с Send rules и храните секретно-маскированную память проекта, одобренную человеком. Для остальных CLI карточка покажет явный резервный способ. Оркестраторы узнают, какие правила действуют для папки.",
   "author": "CanvasTTY contributors",
   "permissions": [
+    "storage",
     "launch:contribute",
     "tools:agents",
     "cards:decorate"
@@ -14,18 +15,18 @@
   "coreFiles": [
     {
       "path": "README.md",
-      "bytes": 5875,
-      "sha256": "ee64f801ef0b067ec766dbf7cbc2988cb91289a0595d5e65bcc0ce02b6b95577"
+      "bytes": 7157,
+      "sha256": "62fb7a4d295071920eb68858024d47b57bf5a0dde096c5d8c9f3942ac5193d5d"
     },
     {
       "path": "README.ru.md",
-      "bytes": 9886,
-      "sha256": "f3d177cd98fcb128df93a1c329662c82c746d3fe4c469c22cee84888c515cc73"
+      "bytes": 11855,
+      "sha256": "cfa49d88ad76b05bcbba37eb54fa53bce76aa4d5cb0492e93e4d349c443c96e6"
     },
     {
       "path": "services/context.mjs",
-      "bytes": 60067,
-      "sha256": "609b4f56f7f338841d8e6cb4b384933c5f9b1a38d997f623e3f548ccbd75ab29"
+      "bytes": 77576,
+      "sha256": "be6bf13a6434e80e02140340f2d02d22592d993fb56ab480fb578464dba4aca5"
     },
     {
       "path": "settings/context.html",
@@ -34,8 +35,8 @@
     },
     {
       "path": "settings/context.js",
-      "bytes": 29637,
-      "sha256": "6452084e4b008da241d73f7afbf83b597dc04394f74e8d6f56bd34afce31a930"
+      "bytes": 36082,
+      "sha256": "989e98ef7e6adcb46628acc420e852abfea2e55fbaceaa7ad60f818c30f92ede"
     },
     {
       "path": "settings/context.css",
@@ -53,7 +54,17 @@
         "appliesTo": [
           "claude",
           "codex",
-          "grok"
+          "grok",
+          "qwen",
+          "kimi",
+          "opencode",
+          "hermes",
+          "omp",
+          "pi",
+          "cursor",
+          "minimax",
+          "devin",
+          "antigravity"
         ],
         "fields": [
           {
@@ -144,7 +155,7 @@
       "tools": [
         {
           "name": "rules_for",
-          "description": "Which of the person's project rules apply to a folder (default: your own folder), optionally for a saved task or one category: the rules in priority order (launch instruction, task, project, organization, user, defaults), the exact text an agent would get, and launchOptions to pass to spawn_agent so a subagent (claude, codex or grok) gets them at launch.",
+          "description": "Which of the person's project rules apply to a folder (default: your own folder), optionally for a saved task or one category: the rules in priority order (launch instruction, task, project, organization, user, defaults), the exact text an agent would get, and launchOptions to pass to spawn_agent so a subagent (claude, codex, grok, qwen or pi) gets them at launch.",
           "inputSchema": {
             "type": "object",
             "properties": {
@@ -162,7 +173,48 @@
               },
               "provider": {
                 "type": "string",
-                "description": "Size the text for this agent: claude (default), codex or grok."
+                "description": "Size the text for this agent: claude (default), codex, grok, qwen or pi."
+              }
+            },
+            "additionalProperties": false
+          },
+          "roles": [
+            "orchestrator",
+            "subagent"
+          ]
+        },
+        {
+          "name": "remember",
+          "description": "Save one concise fact or project convention from this card to the registered project's memory. Secret-like values are masked. New entries await a person's approval by default.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "maxLength": 1500,
+                "description": "A durable project fact, decision or convention. Do not include transient task state."
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "roles": [
+            "orchestrator",
+            "subagent"
+          ]
+        },
+        {
+          "name": "recall",
+          "description": "Search approved memory for the registered project containing this card's working folder. Pending entries are never returned to an agent.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "maxLength": 200,
+                "description": "Words to find; omit to list the latest approved entries."
               }
             },
             "additionalProperties": false

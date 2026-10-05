@@ -6,9 +6,11 @@ let resolveReady: (service: ContextService) => void;
 const ready = new Promise<ContextService>(resolve => { resolveReady = resolve; });
 
 serve({
-  onInitialize: (params, host: Host) => {
+  onInitialize: async (params, host: Host) => {
     const dataDir = typeof params.dataDir === 'string' ? params.dataDir : process.cwd();
-    resolveReady(new ContextService({ host, dataDir, ...(typeof params.pluginId === 'string' ? { pluginId: params.pluginId } : {}) }));
+    const service = new ContextService({ host, dataDir, ...(typeof params.pluginId === 'string' ? { pluginId: params.pluginId } : {}) });
+    await service.loadMemoryPolicy();
+    resolveReady(service);
   },
   methods: {
     // Host-only requests.
@@ -24,6 +26,11 @@ serve({
     saveImports: async params => (await ready).saveImports(params),
     saveTask: async params => (await ready).saveTask(params),
     saveRule: async params => (await ready).saveRule(params),
-    remove: async params => (await ready).remove(params)
+    remove: async params => (await ready).remove(params),
+    memoryState: async params => (await ready).memoryState(params.projectId),
+    saveMemory: async params => (await ready).saveMemory(params),
+    approveMemory: async params => (await ready).approveMemory(params),
+    removeMemory: async params => (await ready).removeMemory(params),
+    setMemoryPolicy: async params => (await ready).setMemoryPolicy(params)
   }
 });
