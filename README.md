@@ -18,8 +18,8 @@ repeat in every prompt, kept per project and sent to Claude Code, Codex, Grok, Q
 - **Design tokens and checkable conventions**: starters for colors, typography, spacing, radius and component colors,
   and `validate.*` JSON presets (forbidden colors or color pairs, formatter settings, file names, dependencies) whose
   shape is checked when saved.
-- **Project memory**: agents can suggest durable facts with `remember` and query approved facts with `recall`. The
-  shared, human-readable `.canvastty/memory.json` is confined to a registered project and secret-masked before saving.
+- **Project memory**: agents can suggest durable facts with `remember` and query approved facts with `recall`. Memory is
+  bound to a registered project, secret-masked before saving, and kept in private plugin data outside the project.
   Agent suggestions wait for approval by default; people can edit, approve or remove each item in Settings, or turn off
   approval for that project. Records show author and date. Only approved memory is sent at launch, capped at 4 KiB
   (and within each CLI's smaller argument limit).
@@ -75,8 +75,12 @@ passes the launch on. The badge needs the `cards:decorate` permission.
 ## Storage
 
 Projects, tasks, rules and approval policy live in `rules/rules.json` (private file) in the plugin's data folder, apart from any
-settings; each project's `.canvastty/memory.json` remains with that project. Rule changes take `rules/rules.lock` and are checked against the revision stored in the file, so a second writer on
-the same folder is refused instead of overwritten (a lock left behind is taken over after 30 s). Uninstalling removes the plugin's data; project memory stays in the project.
+settings. Project memory lives in `memory/<project-identity-hash>.json` in that same private data folder, outside the
+agent-writable project. A legacy `.canvastty/memory.json` is imported once with every entry pending approval; later
+changes to that legacy file cannot approve entries. Rule changes take `rules/rules.lock` and are checked against the
+revision stored in the file, so a second writer on the same folder is refused instead of overwritten (a lock left
+behind is taken over after 30 s). Removing the plugin's data also removes its rules and approved memory; legacy
+project files are left untouched.
 Between the service and CanvasTTY a frame is at most 1 MiB, a host call fails after 30 s or past 64 in flight, and
 waiting events and logs are capped at 8 MiB.
 
